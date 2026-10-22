@@ -3,7 +3,7 @@ import { deserializeIdentity, parsePairingCode, serializeIdentity, type Clipboar
 import { joinAccount, type WebSocketCtor } from '@pocket/transport';
 import { Bot, GrammyError, InlineKeyboard, InputFile, Keyboard, type Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
-import { escapeHtml, itemPieces, permissionHtml, type Piece } from './render.js';
+import { copyTargets, escapeHtml, itemPieces, permissionHtml } from './render.js';
 import { ReplyStream } from './stream.js';
 import { buttonFor, STRINGS, stringsFor, type Strings } from './strings.js';
 import type { BotState, BotStore, Link } from './store.js';
@@ -44,6 +44,8 @@ interface Linked {
   prompts: Map<string, { messageId: number; sessionId: string }>;
   /** The next text or photo goes to the clipboard instead of the chat. */
   pending?: { kind: 'text' | 'photo'; at: number };
+  /** Finished replies with "→ PC" buttons, by the id of their last message. */
+  replies: Map<number, { reply: string; code?: string }>;
   lastError: string | null;
 }
 
@@ -52,6 +54,7 @@ const PHOTO_LIMIT = 10 * 1024 * 1024;
 const READY_TIMEOUT_MS = 8_000;
 const PENDING_TTL_MS = 10 * 60_000;
 const MAX_CHATS_LISTED = 10;
+const MAX_REMEMBERED_REPLIES = 100;
 
 /**
  * Telegram front for the paired computers' clipboard and for chats with Claude. Every Telegram account that
@@ -125,7 +128,7 @@ export class PocketBot {
         this.persist();
       },
     });
-    const entry: Linked = { link, client, turns: [], prompts: new Map(), lastError: null };
+    const entry: Linked = { link, client, turns: [], prompts: new Map(), replies: new Map(), lastError: null };
     client.subscribe((s) => void this.onState(entry, s));
     client.connect();
     this.linked.set(id, entry);
@@ -145,7 +148,7 @@ export class PocketBot {
     bot.command('chats', (ctx) => this.withLinked(ctx, (l, t) => this.listChats(ctx, l, t)));
     bot.command('stop', (ctx) => this.withLinked(ctx, (l, t) => this.stopChat(ctx, l, t)));
     bot.command('app', (ctx) => this.withLinked(ctx, (l, t) => this.openApp(ctx, l, t)));
-    bot.command('help', (ctx) => ctx.reply(this.t(ctx).help, { reply_markup: this.keyboard(this.t(ctx)) }));
+    bot.command('help', (ctx) => ctx.reply(this.t(ctx).help, { reply_markup: this.keyboard(this.t(ctx), this.linked.get(String(ctx.from?.id))) }));
     bot.callbackQuery(/^pc:(.+)$/, (ctx) =>
       this.withLinked(ctx, async (l, t) => {
         const id = ctx.match[1] ?? '';
@@ -154,6 +157,23 @@ export class PocketBot {
         if (!pc) return;
         l.client.selectComputer(pc.deviceId);
         await ctx.editMessageText(t.pcSet(pc.name)).catch(() => {});
+      }),
+    );
+    bot.callbackQuery(/^copy:(code|reply):(\d+)$/, (ctx) =>
+      this.withLinked(ctx, async (l, t) => {
+        const what = ctx.match[1] as 'code' | 'reply';
+        const remembered = l.replies.get(Number(ctx.match[2]));
+        const text = what === 'code' ? remembered?.code : remembered?.reply;
+        if (!text) return void (await ctx.answerCallbackQuery({ text: what === 'code' ? t.noCode : t.failed('expired'), show_alert: false }));
+        const pc = this.target(l);
+        if (!pc) return void (await ctx.answerCallbackQuery({ text: t.noComputer, show_alert: true }));
+        if (!pc.online) return void (await ctx.answerCallbackQuery({ text: t.pcOffline(pc.name), show_alert: true }));
+        try {
+          await l.client.writeClipboard(pc.deviceId, { kind: 'text', text });
+          await ctx.answerCallbackQuery({ text: t.sentToPc(pc.name) });
+        } catch (e) {
+          await ctx.answerCallbackQuery({ text: t.failed(e instanceof Error ? e.message : String(e)), show_alert: true });
+        }
       }),
     );
     bot.callbackQuery(/^chat:(.+)$/, (ctx) =>
@@ -187,12 +207,19 @@ export class PocketBot {
         switch (buttonFor(text)) {
           case 'read':
             return this.readClipboard(ctx, l, t);
+          // No force_reply here: it would replace the keyboard, which is the whole point of having one.
           case 'text':
             l.pending = { kind: 'text', at: Date.now() };
-            return void (await ctx.reply(t.sendText, { reply_markup: { force_reply: true, input_field_placeholder: t.buttons.text } }));
+            return void (await ctx.reply(t.sendText, { reply_markup: this.keyboard(t, l) }));
           case 'photo':
             l.pending = { kind: 'photo', at: Date.now() };
-            return void (await ctx.reply(t.sendPhoto, { reply_markup: { force_reply: true, input_field_placeholder: t.buttons.photo } }));
+            return void (await ctx.reply(t.sendPhoto, { reply_markup: this.keyboard(t, l) }));
+          case 'screenshot':
+            return this.sendScreenshot(ctx, l, t);
+          case 'newChat':
+            return this.newChat(ctx, l, t, '');
+          case 'stop':
+            return this.stopChat(ctx, l, t);
           case 'chats':
             return this.listChats(ctx, l, t);
           case 'pc':
@@ -238,8 +265,11 @@ export class PocketBot {
     return stringsFor(l.link.languageCode);
   }
 
-  private keyboard(t: Strings): Keyboard {
-    return new Keyboard().text(t.buttons.read).row().text(t.buttons.text).text(t.buttons.photo).row().text(t.buttons.chats).text(t.buttons.pc).text(t.buttons.status).resized().persistent();
+  /** The control panel under the input: always the same, so it never has to be asked for again. One computer needs no picker. */
+  private keyboard(t: Strings, l?: Linked): Keyboard {
+    const kb = new Keyboard().text(t.buttons.read).text(t.buttons.screenshot).row().text(t.buttons.text).text(t.buttons.photo).row().text(t.buttons.newChat).text(t.buttons.stop);
+    if ((l?.client.clipboardComputers().length ?? 0) > 1) kb.text(t.buttons.pc);
+    return kb.text(t.buttons.status).resized().persistent();
   }
 
   private takePending(l: Linked): 'text' | 'photo' | undefined {
@@ -270,7 +300,7 @@ export class PocketBot {
       const l = this.linked.get(id);
       if (!l) return void (await ctx.reply(t.notLinked));
       const name = l.client.getState().host?.user?.name ?? '…';
-      return void (await ctx.reply(t.linked(name, this.target(l)?.name), { reply_markup: this.keyboard(t) }));
+      return void (await ctx.reply(t.linked(name, this.target(l)?.name), { reply_markup: this.keyboard(t, l) }));
     }
     let parsed;
     try {
@@ -308,7 +338,7 @@ export class PocketBot {
       this.persist();
       const state = await this.ready(l);
       this.opts.log(`telegram: linked ${id} as ${state.host?.user?.name ?? 'unknown'} (${joined.deviceId})`);
-      await ctx.reply(t.linked(state.host?.user?.name ?? '…', this.target(l)?.name), { reply_markup: this.keyboard(t) });
+      await ctx.reply(t.linked(state.host?.user?.name ?? '…', this.target(l)?.name), { reply_markup: this.keyboard(t, l) });
     } catch (e) {
       await ctx.reply(t.linkFailed(e instanceof Error ? e.message : String(e)));
     }
@@ -361,8 +391,25 @@ export class PocketBot {
     if (!pc.online) return void (await ctx.reply(t.pcOffline(pc.name)));
     await ctx.replyWithChatAction('typing');
     const items = await l.client.readClipboard(pc.deviceId);
-    if (!items.length) return void (await ctx.reply(t.empty(pc.name)));
+    if (!items.length) return void (await ctx.reply(t.empty(pc.name), { reply_markup: this.keyboard(t, l) }));
     for (const item of items) await this.sendItem(ctx, item, pc.name);
+  }
+
+  private async sendScreenshot(ctx: Context, l: Linked, t: Strings): Promise<void> {
+    const state = await this.ready(l);
+    if (!state.brainOnline) return void (await ctx.reply(t.macOffline));
+    const pc = this.target(l);
+    if (!pc) return void (await ctx.reply(t.noComputer));
+    if (!pc.online) return void (await ctx.reply(t.pcOffline(pc.name)));
+    if (!pc.capabilities?.includes('screenshot')) return void (await ctx.reply(t.noScreenshot(pc.name), { reply_markup: this.keyboard(t, l) }));
+    await ctx.replyWithChatAction('upload_photo').catch(() => {});
+    try {
+      const image = await l.client.screenshot(pc.deviceId);
+      const file = new InputFile(Buffer.from(image.dataBase64, 'base64'), image.mime === 'image/png' ? 'screen.png' : 'screen.jpg');
+      await ctx.replyWithPhoto(file, { caption: t.screenshotOf(pc.name), reply_markup: this.keyboard(t, l) });
+    } catch (e) {
+      await ctx.reply(t.screenshotFailed(e instanceof Error ? e.message : String(e)), { reply_markup: this.keyboard(t, l) });
+    }
   }
 
   private async sendItem(ctx: Context, item: ClipboardItem, pcName: string): Promise<void> {
@@ -391,7 +438,7 @@ export class PocketBot {
     if (!pc) return void (await ctx.reply(t.noComputer));
     if (!pc.online) return void (await ctx.reply(t.pcOffline(pc.name)));
     await l.client.writeClipboard(pc.deviceId, item);
-    await ctx.reply(t.copied(pc.name));
+    await ctx.reply(t.copied(pc.name), { reply_markup: this.keyboard(t, l) });
   }
 
   private async pickComputer(ctx: Context, l: Linked, t: Strings): Promise<void> {
@@ -415,7 +462,7 @@ export class PocketBot {
         claude: s.host?.claudeVersion,
         computers: s.computers.map((c) => ({ name: c.name, online: c.online, current: c.deviceId === current?.deviceId, clipboard: c.capabilities?.includes('clipboard') ?? false })),
       }),
-      { reply_markup: this.keyboard(t) },
+      { reply_markup: this.keyboard(t, l) },
     );
   }
 
@@ -474,7 +521,7 @@ export class PocketBot {
     const id = await l.client.createSession(title.trim() || undefined);
     this.setActiveSession(l, id);
     const meta = l.client.getState().sessions.find((s) => s.sessionId === id);
-    await ctx.reply(t.newChat(meta?.title ?? title), { reply_markup: this.keyboard(t) });
+    await ctx.reply(t.newChat(meta?.title ?? title), { reply_markup: this.keyboard(t, l) });
   }
 
   private async listChats(ctx: Context, l: Linked, t: Strings): Promise<void> {
@@ -489,16 +536,16 @@ export class PocketBot {
 
   private async stopChat(ctx: Context, l: Linked, t: Strings): Promise<void> {
     const session = this.activeSession(l);
-    if (!session || session.state === 'idle') return void (await ctx.reply(t.nothingRunning));
+    if (!session || session.state === 'idle') return void (await ctx.reply(t.nothingRunning, { reply_markup: this.keyboard(t, l) }));
     l.client.interrupt(session.sessionId);
-    await ctx.reply(t.stopped);
+    await ctx.reply(t.stopped, { reply_markup: this.keyboard(t, l) });
   }
 
   private async sendToClaude(ctx: Context, l: Linked, t: Strings, text: string, attachments?: { mime: string; dataBase64: string; name?: string }[]): Promise<void> {
     const state = await this.ready(l);
     if (!state.brainOnline) return void (await ctx.reply(t.macOffline));
     const session = this.activeSession(l);
-    if (!session) return void (await ctx.reply(t.noChat, { reply_markup: this.keyboard(t) }));
+    if (!session) return void (await ctx.reply(t.noChat, { reply_markup: this.keyboard(t, l) }));
     const body = text.trim() || (attachments?.length ? '(see attachment)' : '');
     if (!body) return;
     const baseLen = (state.threads[session.sessionId] ?? []).length;
@@ -535,6 +582,19 @@ export class PocketBot {
     };
   }
 
+  /** Buttons under a finished reply: its last code block and the whole reply, each one tap away from the PC clipboard. */
+  private async attachCopyButtons(l: Linked, t: Strings, messageId: number | undefined, items: ChatItem[]): Promise<void> {
+    if (!messageId) return;
+    const targets = copyTargets(items);
+    if (!targets.reply) return;
+    l.replies.set(messageId, targets);
+    while (l.replies.size > MAX_REMEMBERED_REPLIES) l.replies.delete(l.replies.keys().next().value as number);
+    const kb = new InlineKeyboard();
+    if (targets.code) kb.text(t.codeToPc, `copy:code:${messageId}`);
+    kb.text(t.replyToPc, `copy:reply:${messageId}`);
+    await this.bot.api.editMessageReplyMarkup(l.link.chatId, messageId, { reply_markup: kb }).catch(() => {});
+  }
+
   /** Every change of the person's state: streams replies, shows and clears permission prompts. */
   private async onState(l: Linked, s: ChatState): Promise<void> {
     const t = this.tFor(l);
@@ -563,6 +623,7 @@ export class PocketBot {
       const ended = items.ended || items.items.some((i) => i.type === 'result' || i.type === 'error') || (turn.sawRunning && session?.state === 'idle');
       turn.done = ended;
       await turn.stream.update(items.items.flatMap(itemPieces), ended);
+      if (ended) await this.attachCopyButtons(l, t, turn.stream.lastMessageId(), items.items);
     }
     l.turns = l.turns.filter((turn) => !turn.done);
 

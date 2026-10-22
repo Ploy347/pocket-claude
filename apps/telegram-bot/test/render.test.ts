@@ -1,11 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { itemPieces, markdownPieces, packMessages, permissionHtml, type Piece } from '../src/render.js';
+import { copyTargets, itemPieces, markdownPieces, packMessages, permissionHtml, type Piece } from '../src/render.js';
 import { ReplyStream } from '../src/stream.js';
 
 describe('render', () => {
   it('turns markdown into escaped Telegram HTML', () => {
     const pieces = markdownPieces('Use `a<b` here\n\n```py\nprint("<hi>")\n```');
     expect(packMessages(pieces)).toEqual(['Use <code>a&lt;b</code> here\n\n<pre><code class="language-py">print("&lt;hi&gt;")</code></pre>']);
+  });
+
+  it('shows headings, lists, quotes, bold, italic and links the way Telegram can', () => {
+    const md = ['## Plan', '', '- **run** `npm test`', '- see [docs](https://x.y/z)', '', '1. first', '2. *second*', '', '> note'].join('\n');
+    expect(packMessages(markdownPieces(md))).toEqual([
+      ['<b>Plan</b>', '• <b>run</b> <code>npm test</code>\n• see <a href="https://x.y/z">docs</a>', '1. first\n2. <i>second</i>', '<blockquote>note</blockquote>'].join('\n\n'),
+    ]);
+  });
+
+  it('picks what the "→ PC" buttons copy: the reply and its last code block', () => {
+    const reply = { type: 'assistant' as const, key: 'a', text: 'Run:\n```sh\nnpm i\n```\nthen\n```sh\nnpm test\n```', streaming: false };
+    expect(copyTargets([reply, { type: 'tool', key: 't', id: 't', name: 'x', input: {}, output: '' }])).toEqual({ reply: reply.text, code: 'npm test' });
+    expect(copyTargets([{ type: 'assistant', key: 'b', text: 'just words', streaming: false }])).toEqual({ reply: 'just words' });
+    expect(copyTargets([])).toEqual({ reply: '' });
   });
 
   it('renders tool calls as one italic line and errors with a warning sign', () => {
@@ -19,7 +33,7 @@ describe('render', () => {
   it('packs pieces into messages under the limit and splits long code blocks by line', () => {
     const line = 'x'.repeat(90);
     const code: Piece = { kind: 'code', lang: '', text: Array(5).fill(line).join('\n') };
-    const chunks = packMessages([{ kind: 'para', inline: [{ code: false, text: 'intro' }] }, code, { kind: 'para', inline: [{ code: false, text: 'outro' }] }], 200);
+    const chunks = packMessages([{ kind: 'para', inline: [{ text: 'intro' }] }, code, { kind: 'para', inline: [{ text: 'outro' }] }], 200);
     expect(chunks).toEqual([`intro\n\n<pre>${line}\n${line}</pre>`, `<pre>${line}\n${line}</pre>`, `<pre>${line}</pre>\n\noutro`]);
     for (const c of chunks) expect(c.replace(/<[^>]+>/g, '').length).toBeLessThanOrEqual(200);
   });

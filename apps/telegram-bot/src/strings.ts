@@ -1,6 +1,14 @@
 /** Bot texts. Telegram tells us each user's language; Russian speakers get Russian, everyone else English. */
 export interface Strings {
-  buttons: { read: string; text: string; photo: string; chats: string; pc: string; status: string };
+  buttons: { read: string; text: string; photo: string; screenshot: string; newChat: string; stop: string; chats: string; pc: string; status: string };
+  /** Inline buttons under a finished reply. */
+  codeToPc: string;
+  replyToPc: string;
+  sentToPc: (pc: string) => string;
+  noCode: string;
+  screenshotOf: (pc: string) => string;
+  screenshotFailed: (reason: string) => string;
+  noScreenshot: (pc: string) => string;
   commands: { new: string; chats: string; stop: string; status: string; pc: string; app: string; unlink: string; help: string };
   notLinked: string;
   badCode: string;
@@ -50,7 +58,14 @@ export interface Strings {
 }
 
 const en: Strings = {
-  buttons: { read: '📋 Clipboard → here', text: '📥 Text → clipboard', photo: '🖼 Photo → clipboard', chats: '💬 Chats', pc: '🖥 Computer', status: 'ℹ️ Status' },
+  buttons: { read: '📋 Clipboard → here', text: '📥 Text → clipboard', photo: '🖼 Photo → clipboard', screenshot: '📸 Screenshot', newChat: '💬 New chat', stop: '⏹ Stop', chats: '💬 Chats', pc: '🖥 Computer', status: 'ℹ️ Status' },
+  codeToPc: '⌨️ Code → PC',
+  replyToPc: '📄 Reply → PC',
+  sentToPc: (pc) => `On the clipboard of ${pc}. Paste with Ctrl+V.`,
+  noCode: 'No code in this reply.',
+  screenshotOf: (pc) => `Screen of ${pc}`,
+  screenshotFailed: (reason) => `No screenshot: ${reason}`,
+  noScreenshot: (pc) => `${pc} runs an old PocketClipboard without screenshots. Install the current PocketClipboard.exe there.`,
   commands: { new: 'New chat with Claude', chats: 'Pick a chat', stop: 'Stop the current reply', status: 'Mac and computers', pc: 'Pick the clipboard computer', app: 'Open Pocket inside Telegram', unlink: 'Unlink this Telegram account', help: 'What the buttons do' },
   notLinked: 'This bot is not linked to your Pocket yet.\nOn the phone open Settings → Telegram → Link, then tap the link it opens.',
   badCode: 'That link has expired or is not a Pocket link. Make a new one on the phone: Settings → Telegram → Link.',
@@ -64,14 +79,14 @@ const en: Strings = {
   empty: (pc) => `The clipboard on ${pc} is empty.`,
   reading: (pc) => `Reading the clipboard on ${pc}…`,
   copied: (pc) => `Copied to ${pc}.`,
-  sendText: 'Send me the text and it goes to the clipboard.',
-  sendPhoto: 'Send me a photo or an image file and it goes to the clipboard.',
+  sendText: 'Send me the text and it goes to the PC clipboard (the next message only).',
+  sendPhoto: 'Send me a photo or an image file and it goes to the PC clipboard (the next one only).',
   onlyImages: 'Only text and pictures can go to the clipboard for now.',
   pickPc: 'Which computer?',
   pcSet: (pc) => `Using ${pc}.`,
   failed: (reason) => `Did not work: ${reason}`,
   notCopied: 'Not copied: the computer did not answer.',
-  noChat: 'No chat yet. /new starts a chat with Claude; to copy text to the PC tap “📥 Text → clipboard” first.',
+  noChat: 'No chat yet. Tap “💬 New chat” (or /new) to talk to Claude; to copy text to the PC tap “📥 Text → clipboard” first.',
   newChat: (title) => `New chat: ${title}. Write to Claude here.`,
   nowIn: (title) => `Chat: ${title}`,
   chats: 'Your chats',
@@ -101,11 +116,18 @@ const en: Strings = {
       s.computers.length ? 'Computers:' : 'Computers: none',
       ...s.computers.map((c) => `  ${c.online ? '●' : '○'} ${c.name}${c.current ? ' ✓' : ''}${c.clipboard ? '' : ' (no clipboard)'}`),
     ].join('\n'),
-  help: 'Buttons below: get what is on the PC clipboard, or put text and photos there. /new starts a chat with Claude; then plain messages and photos go to it. /chats, /stop, /status, /pc, /app (Pocket inside Telegram), /unlink.',
+  help: 'Buttons below: get what is on the PC clipboard, put text and photos there, or take a screenshot of the PC. “💬 New chat” starts a chat with Claude; then plain messages and photos go to it, and every reply has “Code → PC” / “Reply → PC”. /chats picks an older chat; /status, /pc, /app (Pocket inside Telegram), /unlink.',
 };
 
 const ru: Strings = {
-  buttons: { read: '📋 Буфер → сюда', text: '📥 Текст → в буфер', photo: '🖼 Фото → в буфер', chats: '💬 Чаты', pc: '🖥 Компьютер', status: 'ℹ️ Статус' },
+  buttons: { read: '📋 Буфер → сюда', text: '📥 Текст → в буфер', photo: '🖼 Фото → в буфер', screenshot: '📸 Скриншот', newChat: '💬 Новый чат', stop: '⏹ Стоп', chats: '💬 Чаты', pc: '🖥 Компьютер', status: 'ℹ️ Статус' },
+  codeToPc: '⌨️ Код → ПК',
+  replyToPc: '📄 Ответ → ПК',
+  sentToPc: (pc) => `В буфере ${pc}. Вставь через Ctrl+V.`,
+  noCode: 'В этом ответе нет кода.',
+  screenshotOf: (pc) => `Экран ${pc}`,
+  screenshotFailed: (reason) => `Скриншот не получился: ${reason}`,
+  noScreenshot: (pc) => `На ${pc} старый PocketClipboard без скриншотов. Поставь туда свежий PocketClipboard.exe.`,
   commands: { new: 'Новый чат с Claude', chats: 'Выбрать чат', stop: 'Остановить текущий ответ', status: 'Mac и компьютеры', pc: 'Выбрать компьютер для буфера', app: 'Открыть Pocket внутри Telegram', unlink: 'Отвязать этот Telegram', help: 'Что делают кнопки' },
   notLinked: 'Бот ещё не привязан к твоему Pocket.\nНа телефоне: Настройки → Telegram → Link, затем нажми на открывшуюся ссылку.',
   badCode: 'Ссылка устарела или это не ссылка Pocket. Сделай новую на телефоне: Настройки → Telegram → Link.',
@@ -119,14 +141,14 @@ const ru: Strings = {
   empty: (pc) => `Буфер обмена на ${pc} пуст.`,
   reading: (pc) => `Читаю буфер на ${pc}…`,
   copied: (pc) => `Скопировано на ${pc}.`,
-  sendText: 'Пришли текст — он попадёт в буфер обмена.',
-  sendPhoto: 'Пришли фото или файл с картинкой — оно попадёт в буфер обмена.',
+  sendText: 'Пришли текст — он попадёт в буфер обмена ПК (только следующее сообщение).',
+  sendPhoto: 'Пришли фото или файл с картинкой — оно попадёт в буфер обмена ПК (только следующее).',
   onlyImages: 'В буфер пока можно положить только текст и картинки.',
   pickPc: 'Какой компьютер?',
   pcSet: (pc) => `Теперь ${pc}.`,
   failed: (reason) => `Не получилось: ${reason}`,
   notCopied: 'Не скопировано: компьютер не ответил.',
-  noChat: 'Чата ещё нет. /new начинает чат с Claude; чтобы положить текст в буфер ПК, сначала нажми «📥 Текст → в буфер».',
+  noChat: 'Чата ещё нет. Нажми «💬 Новый чат» (или /new), чтобы говорить с Claude; чтобы положить текст в буфер ПК, сначала нажми «📥 Текст → в буфер».',
   newChat: (title) => `Новый чат: ${title}. Пиши Claude сюда.`,
   nowIn: (title) => `Чат: ${title}`,
   chats: 'Твои чаты',
@@ -156,7 +178,7 @@ const ru: Strings = {
       s.computers.length ? 'Компьютеры:' : 'Компьютеры: нет',
       ...s.computers.map((c) => `  ${c.online ? '●' : '○'} ${c.name}${c.current ? ' ✓' : ''}${c.clipboard ? '' : ' (без буфера)'}`),
     ].join('\n'),
-  help: 'Кнопки внизу: забрать то, что в буфере на ПК, или положить туда текст и фото. /new начинает чат с Claude — дальше обычные сообщения и фото идут ему. /chats, /stop, /status, /pc, /app (Pocket внутри Telegram), /unlink.',
+  help: 'Кнопки внизу: забрать то, что в буфере на ПК, положить туда текст и фото, снять скриншот ПК. «💬 Новый чат» начинает чат с Claude — дальше обычные сообщения и фото идут ему, а под каждым ответом есть «Код → ПК» / «Ответ → ПК». /chats выбирает старый чат; /status, /pc, /app (Pocket внутри Telegram), /unlink.',
 };
 
 export const STRINGS: Record<'en' | 'ru', Strings> = { en, ru };

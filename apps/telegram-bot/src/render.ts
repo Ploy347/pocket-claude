@@ -1,4 +1,4 @@
-import { parseInline, parseMarkdown, permissionPreview, shortToolName, summarizeTool, type ChatItem, type Inline } from '@pocket/client-core';
+import { parseRichInline, parseRichMarkdown, permissionPreview, shortToolName, summarizeTool, type ChatItem, type RichBlock, type RichInline } from '@pocket/client-core';
 
 /** Telegram allows 4096 characters per message; leave room for the streaming cursor and rounding. */
 export const MESSAGE_LIMIT = 4000;
@@ -6,7 +6,8 @@ export const CURSOR = ' ▍';
 
 /** One renderable unit of a reply. Pieces are packed into messages and never split across tags. */
 export type Piece =
-  | { kind: 'para'; inline: Inline[] }
+  | { kind: 'para'; inline: RichInline[] }
+  | { kind: 'quote'; inline: RichInline[] }
   | { kind: 'code'; lang: string; text: string }
   | { kind: 'tool'; text: string; failed: boolean }
   | { kind: 'error'; text: string };
@@ -15,8 +16,31 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const bold = (inline: RichInline[]): RichInline[] => inline.map((r) => ({ ...r, bold: true }));
+
+/** Headings become bold lines, lists get their markers; Telegram has no other way to show them. */
+function blockPiece(b: RichBlock): Piece {
+  switch (b.type) {
+    case 'code':
+      return { kind: 'code', lang: b.lang, text: b.text };
+    case 'heading':
+      return { kind: 'para', inline: bold(b.inline) };
+    case 'list':
+      return {
+        kind: 'para',
+        inline: b.items.flatMap((item, i) => [{ text: `${i ? '\n' : ''}${b.ordered ? `${i + 1}.` : '•'} ` }, ...item]),
+      };
+    case 'quote':
+      return { kind: 'quote', inline: b.inline };
+    case 'rule':
+      return { kind: 'para', inline: [{ text: '———' }] };
+    case 'paragraph':
+      return { kind: 'para', inline: b.inline };
+  }
+}
+
 export function markdownPieces(text: string): Piece[] {
-  return parseMarkdown(text).map((b) => (b.type === 'code' ? { kind: 'code', lang: b.lang, text: b.text } : { kind: 'para', inline: b.inline }));
+  return parseRichMarkdown(text).map(blockPiece);
 }
 
 /** What a chat item contributes to the reply: tool calls as one line, text as markdown, results nothing. */
@@ -37,6 +61,7 @@ export function itemPieces(item: ChatItem): Piece[] {
 export function visibleText(p: Piece): string {
   switch (p.kind) {
     case 'para':
+    case 'quote':
       return p.inline.map((i) => i.text).join('');
     case 'code':
       return p.text;
@@ -47,12 +72,27 @@ export function visibleText(p: Piece): string {
   }
 }
 
+function inlineHtml(inline: RichInline[]): string {
+  return inline
+    .map((r) => {
+      let html = escapeHtml(r.text);
+      if (r.code) html = `<code>${html}</code>`;
+      if (r.italic) html = `<i>${html}</i>`;
+      if (r.bold) html = `<b>${html}</b>`;
+      if (r.link && /^https?:\/\//.test(r.link)) html = `<a href="${escapeHtml(r.link).replace(/"/g, '&quot;')}">${html}</a>`;
+      return html;
+    })
+    .join('');
+}
+
 export function pieceHtml(p: Piece): string {
   switch (p.kind) {
     case 'para':
-      return p.inline.map((i) => (i.code ? `<code>${escapeHtml(i.text)}</code>` : escapeHtml(i.text))).join('');
+      return inlineHtml(p.inline);
+    case 'quote':
+      return `<blockquote>${inlineHtml(p.inline)}</blockquote>`;
     case 'code':
-      return p.lang ? `<pre><code class="language-${escapeHtml(p.lang)}">${escapeHtml(p.text)}</code></pre>` : `<pre>${escapeHtml(p.text)}</pre>`;
+      return p.lang ? `<pre><code class="language-${escapeHtml(p.lang).replace(/"/g, '')}">${escapeHtml(p.text)}</code></pre>` : `<pre>${escapeHtml(p.text)}</pre>`;
     case 'tool':
       return `<i>${escapeHtml(visibleText(p))}</i>`;
     case 'error':
@@ -62,7 +102,7 @@ export function pieceHtml(p: Piece): string {
 
 /** Breaks a piece that is too long for one message along line boundaries. */
 function splitPiece(p: Piece, limit: number): Piece[] {
-  const text = p.kind === 'para' ? visibleText(p) : p.kind === 'code' ? p.text : visibleText(p);
+  const text = visibleText(p);
   if (text.length <= limit) return [p];
   const parts: string[] = [];
   let current = '';
@@ -80,7 +120,18 @@ function splitPiece(p: Piece, limit: number): Piece[] {
     }
   }
   if (current) parts.push(current);
-  return parts.map((t) => (p.kind === 'code' ? { kind: 'code', lang: p.lang, text: t } : p.kind === 'para' ? { kind: 'para', inline: parseInline(t) } : { kind: 'error', text: t }));
+  return parts.map((t) => {
+    switch (p.kind) {
+      case 'code':
+        return { kind: 'code', lang: p.lang, text: t };
+      case 'para':
+        return { kind: 'para', inline: parseRichInline(t) };
+      case 'quote':
+        return { kind: 'quote', inline: parseRichInline(t) };
+      default:
+        return { kind: 'error', text: t };
+    }
+  });
 }
 
 /** Packs pieces into messages of at most `limit` visible characters; each message is self-contained HTML. */
@@ -101,6 +152,14 @@ export function packMessages(pieces: Piece[], limit = MESSAGE_LIMIT): string[] {
   }
   flush();
   return out;
+}
+
+/** What "→ PC" puts on the clipboard: the reply as written, and its last code block. */
+export function copyTargets(items: ChatItem[]): { reply: string; code?: string } {
+  const replies = items.filter((i) => i.type === 'assistant').map((i) => i.text.trim()).filter(Boolean);
+  const codes = replies.flatMap((text) => parseRichMarkdown(text).filter((b) => b.type === 'code').map((b) => b.text));
+  const code = codes[codes.length - 1];
+  return { reply: replies.join('\n\n'), ...(code !== undefined && code.trim() ? { code } : {}) };
 }
 
 /** The permission prompt: what the tool wants to do, as a diff or a command. */

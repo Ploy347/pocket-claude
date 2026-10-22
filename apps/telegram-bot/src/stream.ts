@@ -59,4 +59,9 @@ export class ReplyStream {
       }
     }
   }
+
+  /** The message the reply ended in, once sent. */
+  lastMessageId(): number | undefined {
+    return this.messages[this.messages.length - 1]?.id;
+  }
 }

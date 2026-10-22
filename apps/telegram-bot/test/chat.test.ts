@@ -38,7 +38,7 @@ function fakeBrain() {
   const pairings = new Map<string, PairingCode>();
   const sessions: SessionMeta[] = [];
   const received: { from: string; message: InnerMessage }[] = [];
-  const computers = [{ deviceId: 'pc1', name: 'office-pc', online: true, workspaces: [], capabilities: ['clipboard'], pairedAt: 1 }];
+  const computers = [{ deviceId: 'pc1', name: 'office-pc', online: true, workspaces: [], capabilities: ['clipboard', 'screenshot'], pairedAt: 1 }];
   const written: unknown[] = [];
   let reject: string | null = null;
 
@@ -80,6 +80,9 @@ function fakeBrain() {
       case 'clipboard.set':
         written.push(message.payload.item);
         send(from, { type: 'clipboard.written', payload: { requestId: message.payload.requestId, deviceId: message.payload.deviceId } });
+        return;
+      case 'screen.get':
+        send(from, { type: 'screen.result', payload: { requestId: message.payload.requestId, deviceId: message.payload.deviceId, image: { mime: 'image/jpeg', dataBase64: Buffer.from('jpeg').toString('base64'), width: 8, height: 4 } } });
         return;
       default:
         return;
@@ -176,7 +179,10 @@ describe('chat with Claude from Telegram', () => {
     await brain.ready();
     const bot = new PocketBot({ token: '1:test', relayUrl: relay.url, store: memoryStore(), log: () => {}, WebSocket: WS, botInfo: ME, editIntervalMs: 0, download: async () => new Uint8Array([1, 2, 3]) });
     const tg = fakeTelegram(bot);
-    await bot.bot.handleUpdate(command('start', brain.pairingCode()));
+    // The relay learns about the pairing from a frame on the brain's socket; give it a moment before the bot fetches the bundle.
+    const code = brain.pairingCode();
+    await new Promise((r) => setTimeout(r, 50));
+    await bot.bot.handleUpdate(command('start', code));
     expect(tg.lastText()).toMatch(/^Linked as Me/);
 
     // Plain text without a chat is refused with a hint; after /new it goes to Claude.
@@ -184,6 +190,9 @@ describe('chat with Claude from Telegram', () => {
     expect(tg.lastText()).toMatch(/No chat yet/);
     await bot.bot.handleUpdate(command('new', 'Bot chat'));
     expect(tg.lastText()).toBe('New chat: Bot chat. Write to Claude here.');
+    // The keyboard comes with every reply, so the controls never go away; one computer means no picker button.
+    const keyboard = (tg.of('sendMessage').pop()?.payload.reply_markup as { keyboard: { text: string }[][] }).keyboard;
+    expect(keyboard.map((row) => row.map((b) => b.text))).toEqual([['📋 Clipboard → here', '📸 Screenshot'], ['📥 Text → clipboard', '🖼 Photo → clipboard'], ['💬 New chat', '⏹ Stop', 'ℹ️ Status']]);
     expect(brain.sessions[0]?.title).toBe('Bot chat');
     const sessionId = brain.sessions[0]!.sessionId;
 
@@ -230,6 +239,23 @@ describe('chat with Claude from Telegram', () => {
     brain.emit(sessionId, { kind: 'state', state: 'idle' });
     await until('final', () => (tg.lastEdit()?.payload.text === 'Sure, here:\n\n<pre><code class="language-py">print(1)</code></pre>\n\n<i>⚙ run_command python a.py</i>\n\nDone.' ? true : undefined));
 
+    // The finished reply gets "→ PC" buttons; tapping one puts the code or the whole reply on the PC clipboard.
+    const markup = await until('copy buttons', () => tg.of('editMessageReplyMarkup').pop());
+    const copyButtons = (markup.payload.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] }).inline_keyboard[0]!;
+    expect(copyButtons.map((b) => b.text)).toEqual(['⌨️ Code → PC', '📄 Reply → PC']);
+    expect(markup.payload.message_id).toBe(replyId);
+    await bot.bot.handleUpdate(callback(copyButtons[0]!.callback_data, replyId));
+    expect(brain.written).toEqual([{ kind: 'text', text: 'print(1)' }]);
+    expect(tg.of('answerCallbackQuery').pop()?.payload.text).toBe('On the clipboard of office-pc. Paste with Ctrl+V.');
+    await bot.bot.handleUpdate(callback(copyButtons[1]!.callback_data, replyId));
+    expect(brain.written[1]).toEqual({ kind: 'text', text: 'Sure, here:\n```py\nprint(1)\n```\n\nDone.' });
+    brain.written.length = 0;
+
+    await bot.bot.handleUpdate(text('📸 Screenshot'));
+    const shot = await until('screenshot', () => tg.of('sendPhoto').pop());
+    expect(shot.payload.caption).toBe('Screen of office-pc');
+    expect((shot.payload.reply_markup as { keyboard: unknown[] }).keyboard).toHaveLength(3);
+
     // Photos go to Claude as pictures when a chat is active, to the clipboard after the button.
     await bot.bot.handleUpdate(message({ photo: [{ file_id: 'f', file_unique_id: 'u', width: 1, height: 1 }], caption: 'what is this?' }));
     const withPhoto = await until('photo send', () => brain.received.filter((r) => r.message.type === 'message.send')[1]);
@@ -239,13 +265,15 @@ describe('chat with Claude from Telegram', () => {
     expect(brain.written).toEqual([{ kind: 'image', mime: 'image/jpeg', dataBase64: Buffer.from([1, 2, 3]).toString('base64') }]);
     expect(tg.lastText()).toBe('Copied to office-pc.');
     await bot.bot.handleUpdate(text('📥 Text → clipboard'));
+    expect(tg.of('sendMessage').pop()?.payload.reply_markup).toMatchObject({ is_persistent: true });
     await bot.bot.handleUpdate(text('for the clipboard'));
     expect(brain.written[1]).toEqual({ kind: 'text', text: 'for the clipboard' });
+    expect(tg.of('sendMessage').pop()?.payload.reply_markup).toMatchObject({ is_persistent: true });
     expect(brain.received.filter((r) => r.message.type === 'message.send')).toHaveLength(2);
 
     // /chats lists chats with the active one ticked; picking one switches, /stop interrupts.
-    await bot.bot.handleUpdate(command('new'));
-    await bot.bot.handleUpdate(text('💬 Chats'));
+    await bot.bot.handleUpdate(text('💬 New chat'));
+    await bot.bot.handleUpdate(command('chats'));
     const list = (tg.of('sendMessage').pop()?.payload.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] }).inline_keyboard;
     expect(list.map((row) => row[0]?.text)).toEqual(['✓ Chat 2', 'Bot chat', '➕ New chat']);
     await bot.bot.handleUpdate(callback(`chat:${sessionId}`, tg.lastSentId()));

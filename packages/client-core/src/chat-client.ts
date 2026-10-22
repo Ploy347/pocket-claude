@@ -1,4 +1,4 @@
-import { newMessageId, type ClipboardItem, type Computer, type Project, type Effort, type Identity, type InnerMessageBody, type ModelInfo, type PayloadOf, type PermissionDecision, type SessionMeta } from '@pocket/protocol';
+import { newMessageId, type ClipboardItem, type Computer, type Project, type Effort, type Identity, type InnerMessageBody, type ModelInfo, type PayloadOf, type PermissionDecision, type ScreenImage, type SessionMeta } from '@pocket/protocol';
 import { DeviceLink, type IncomingMessage, type WebSocketCtor } from '@pocket/transport';
 import { applyEvent, buildThread, type ChatItem } from './thread.js';
 
@@ -90,6 +90,7 @@ export class ChatClient {
   private readonly listeners = new Set<(s: ChatState) => void>();
   private readonly pendingCreate: ((id: string) => void)[] = [];
   private readonly clipboardWaiters = new Map<string, { resolve: (items: ClipboardItem[]) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly screenWaiters = new Map<string, { resolve: (image: ScreenImage) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly opts: ChatClientOptions) {
     this.link = new DeviceLink({
@@ -262,6 +263,19 @@ export class ChatClient {
   async writeClipboard(deviceId: string, item: ClipboardItem): Promise<void> {
     const requestId = newMessageId();
     await this.awaitClipboard(requestId, { type: 'clipboard.set', payload: { requestId, deviceId, item } });
+  }
+
+  /** A picture of that computer's screens right now (PocketClipboard with the 'screenshot' capability). */
+  screenshot(deviceId: string): Promise<ScreenImage> {
+    const requestId = newMessageId();
+    return new Promise((resolve, reject) => {
+      if (!this.link.send(this.opts.brainDeviceId, { type: 'screen.get', payload: { requestId, deviceId } })) return reject(new Error('Not connected to the Mac'));
+      const timer = setTimeout(() => {
+        this.screenWaiters.delete(requestId);
+        reject(new Error('The computer did not answer'));
+      }, 75_000);
+      this.screenWaiters.set(requestId, { resolve, reject, timer });
+    });
   }
 
   private awaitClipboard(requestId: string, body: InnerMessageBody): Promise<ClipboardItem[]> {
@@ -438,6 +452,15 @@ export class ChatClient {
         return this.settleClipboard(message.payload.requestId, message.payload.items, message.payload.error);
       case 'clipboard.written':
         return this.settleClipboard(message.payload.requestId, [], message.payload.error);
+      case 'screen.result': {
+        const w = this.screenWaiters.get(message.payload.requestId);
+        if (!w) return;
+        clearTimeout(w.timer);
+        this.screenWaiters.delete(message.payload.requestId);
+        if (message.payload.image) w.resolve(message.payload.image);
+        else w.reject(new Error(message.payload.error ?? 'No image'));
+        return;
+      }
       case 'relay.moved':
         if (!isRelayUrl(message.payload.url) || message.payload.url === this.link.currentRelayUrl) return;
         this.link.setRelayUrl(message.payload.url);
