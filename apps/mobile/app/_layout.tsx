@@ -73,6 +73,7 @@ function Routes({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="direct/[id]" />
           <Stack.Screen name="direct/activity" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="direct/computers" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="direct/call" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom', gestureEnabled: false }} />
           <Stack.Screen name="settings" />
           <Stack.Screen name="new-post" options={{ presentation: 'transparentModal', animation: 'fade' }} />
         </Stack.Protected>

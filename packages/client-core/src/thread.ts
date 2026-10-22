@@ -3,7 +3,7 @@ import type { SessionEvent } from '@pocket/protocol';
 const MAX_TOOL_OUTPUT = 20_000;
 
 export type ChatItem =
-  | { type: 'user'; key: string; text: string; from: string; images?: number; files?: string[] }
+  | { type: 'user'; key: string; text: string; from: string; images?: number; files?: string[]; voice?: boolean }
   | { type: 'assistant'; key: string; text: string; streaming: boolean }
   | {
       type: 'tool';
@@ -30,7 +30,7 @@ function finalizeStreaming(items: ChatItem[]): ChatItem[] {
 export function applyEvent(items: ChatItem[], event: SessionEvent): ChatItem[] {
   switch (event.kind) {
     case 'user':
-      return [...finalizeStreaming(items), { type: 'user', key: key(), text: event.text, from: event.from, ...(event.images ? { images: event.images } : {}), ...(event.files?.length ? { files: event.files } : {}) }];
+      return [...finalizeStreaming(items), { type: 'user', key: key(), text: event.text, from: event.from, ...(event.images ? { images: event.images } : {}), ...(event.files?.length ? { files: event.files } : {}), ...(event.voice ? { voice: true } : {}) }];
     case 'text_delta': {
       const last = items[items.length - 1];
       if (last?.type === 'assistant' && last.streaming) return [...items.slice(0, -1), { ...last, text: last.text + event.text }];

@@ -641,7 +641,7 @@ export class Brain {
         if (!s) return this.sendError(from, 'unknown_session', 'Session not found');
         this.enforceLiveLimit(s.id);
         try {
-          await s.send({ text: message.payload.text, attachments: message.payload.attachments, from });
+          await s.send({ text: message.payload.text, attachments: message.payload.attachments, from, ...(message.payload.voice ? { voice: true } : {}) });
         } catch (e) {
           log(`send failed: ${String(e)}`);
           this.sendError(from, 'claude_failed', e instanceof Error ? e.message : String(e));

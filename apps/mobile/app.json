@@ -22,6 +22,9 @@
       },
       "permissions": [
         "CAMERA",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "RECORD_AUDIO",
         "USE_BIOMETRIC",
         "VIBRATE"
       ],
@@ -45,7 +48,14 @@
       "bundleIdentifier": "dev.pocketclaude.app",
       "supportsTablet": false,
       "icon": "./assets/icon.png",
-      "appleTeamId": "4D42LWMN69"
+      "appleTeamId": "4D42LWMN69",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "NSMicrophoneUsageDescription": "Pocket uses the microphone for voice calls with the assistant.",
+        "NSSpeechRecognitionUsageDescription": "Pocket turns what you say on a call into text for the assistant."
+      }
     },
     "plugins": [
       "expo-router",
@@ -81,7 +91,20 @@
       ],
       "expo-video",
       "expo-image",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Pocket uses the microphone for voice calls with the assistant.",
+          "speechRecognitionPermission": "Pocket turns what you say on a call into text for the assistant."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Pocket uses the microphone for voice calls with the assistant."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

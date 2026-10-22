@@ -50,7 +50,18 @@ export interface UserTurn {
   text: string;
   attachments?: { mime: string; dataBase64: string; name?: string }[];
   from: string;
+  /** Spoken on a call: the reply is read aloud, so it must be short and plain. */
+  voice?: boolean;
 }
+
+/** Prepended to spoken turns. Claude keeps its tools; only the shape of the answer changes. */
+export const VOICE_NOTE = [
+  '[Voice call. The user said this aloud and will hear your reply read by text-to-speech.',
+  'Answer in the user\'s language in one to three short spoken sentences: no markdown, no lists, no code blocks, no links.',
+  'If they ask for a command, code or any text to paste, put the exact text on their computer with pc_clipboard_write and say it is on the clipboard, ready for Ctrl+V.',
+  'If they ask to look at the screen, take a screenshot with pc_screenshot and tell them what matters. If they ask what they copied, read it with pc_clipboard_read and summarise it.',
+  'After any action, say in one sentence what you did and what you saw.]',
+].join(' ');
 
 /** Where chats work when no project is picked. */
 export const DEFAULT_MAC_WORKSPACE = process.env.POCKET_WORKSPACE ?? join(homedir(), 'Documents', 'pocket-workspace');
@@ -291,6 +302,7 @@ export class Session {
         from: turn.from,
         ...(images.length ? { images: images.length } : {}),
         ...(files.length ? { files: files.map((f, i) => safeFileName(f.name, `file-${i + 1}`)) } : {}),
+        ...(turn.voice ? { voice: true } : {}),
       },
       true,
     );
@@ -303,7 +315,8 @@ export class Session {
       source: { type: 'base64' as const, media_type: img.mime as 'image/png', data: img.dataBase64 },
     }));
     const notes = this.saveFiles(files, blocks);
-    const text = notes.length ? `${turn.text}\n\n${notes.join('\n')}` : turn.text;
+    const spoken = turn.voice ? `${VOICE_NOTE}\n\n${turn.text}` : turn.text;
+    const text = notes.length ? `${spoken}\n\n${notes.join('\n')}` : spoken;
     const content: SDKUserMessage['message']['content'] = blocks.length ? [...blocks, { type: 'text' as const, text }] : text;
     this.input!.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, origin: { kind: 'human' } } as SDKUserMessage);
     this.touch();

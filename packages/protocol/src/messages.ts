@@ -41,6 +41,8 @@ export const sessionEventSchema = z.discriminatedUnion('kind', [
     from: z.string(),
     images: z.number().int().positive().optional(),
     files: z.array(z.string()).optional(),
+    /** Spoken on a call. */
+    voice: z.boolean().optional(),
   }),
   z.object({ kind: z.literal('text_delta'), text: z.string() }),
   z.object({ kind: z.literal('text'), text: z.string() }),
@@ -159,7 +161,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   m('session.create', z.object({ title: z.string().optional() })),
   m('session.list', z.object({})),
   m('session.history', z.object({ sessionId: z.string() })),
-  m('message.send', z.object({ sessionId: z.string(), text: z.string(), attachments: z.array(attachmentSchema).optional() })),
+  /** `voice`: the text was spoken on a call and the reply will be read aloud; the brain asks Claude for a short spoken answer. */
+  m('message.send', z.object({ sessionId: z.string(), text: z.string(), attachments: z.array(attachmentSchema).optional(), voice: z.boolean().optional() })),
   m('session.interrupt', z.object({ sessionId: z.string() })),
   m('permission.respond', z.object({ requestId: z.string(), decision: permissionDecisionSchema })),
   m('status.get', z.object({})),

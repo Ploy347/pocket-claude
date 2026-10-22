@@ -42,6 +42,7 @@ function ThreadHeader({
   subtitleColor,
   onCall,
   onVideo,
+  onSubtitle,
 }: {
   avatar: ReactNode;
   title: string;
@@ -49,6 +50,8 @@ function ThreadHeader({
   subtitleColor?: string;
   onCall?: () => void;
   onVideo?: () => void;
+  /** The status line names the computer; tapping it opens the computer picker. */
+  onSubtitle?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -62,9 +65,11 @@ function ThreadHeader({
         <Text style={styles.title} numberOfLines={1}>
           {title}
         </Text>
-        <Text style={[styles.subtitle, subtitleColor ? { color: subtitleColor } : null]} numberOfLines={1}>
-          {subtitle}
-        </Text>
+        <Pressable onPress={onSubtitle} hitSlop={6}>
+          <Text style={[styles.subtitle, subtitleColor ? { color: subtitleColor } : null]} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        </Pressable>
       </View>
       <Pressable onPress={onCall} disabled={!onCall} hitSlop={10} accessibilityLabel="Computers">
         <Ionicons name="call-outline" size={24} color={colors.text} />
@@ -163,8 +168,9 @@ function ClaudeThread({ id }: { id: string }) {
         title={persona.name}
         subtitle={status}
         subtitleColor={session?.state === 'waiting_permission' ? colors.warn : undefined}
-        onCall={() => router.push({ pathname: '/direct/computers', params: { sessionId: id } })}
+        onCall={() => router.push({ pathname: '/direct/call', params: { id } })}
         onVideo={actions.agents}
+        onSubtitle={() => router.push({ pathname: '/direct/computers', params: { sessionId: id } })}
       />
 
       <FlatList
