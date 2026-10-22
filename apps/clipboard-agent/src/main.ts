@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -102,6 +102,7 @@ async function pair(): Promise<boolean> {
 }
 
 async function run(): Promise<void> {
+  removeOldExes();
   const state = loadState();
   if (!state) {
     log('not paired; run "PocketClipboard.exe pair"');
@@ -189,27 +190,33 @@ function startHidden(): void {
 }
 
 /**
- * The running copy keeps its exe locked until it has exited. Wait for it, then stop any leftover copy
- * (an old version, or another install window) by force; never this process.
+ * A running copy keeps its exe locked, but Windows still lets a locked exe be renamed. So the old file is moved
+ * aside (removed on the next start) and the new one copied in; running copies are asked to quit first.
  */
 async function replaceExe(): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  let killed = false;
-  for (;;) {
+  for (let i = 0; i < 6; i++) {
     try {
       copyFileSync(process.execPath, files.exe);
       return;
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
-      if ((code !== 'EPERM' && code !== 'EBUSY') || Date.now() > deadline) throw e;
-      if (!killed && Date.now() > deadline - 11_000) {
-        killed = true;
-        console.log('Stopping the running copy…');
+      if (code !== 'EPERM' && code !== 'EBUSY') throw e;
+      if (i === 1) {
         spawnSync('taskkill', ['/F', '/FI', `IMAGENAME eq ${APP}.exe`, '/FI', `PID ne ${process.pid}`], { stdio: 'ignore', windowsHide: true });
+      } else if (i >= 2) {
+        renameSync(files.exe, `${files.exe}.old-${Date.now()}`);
       }
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 700));
     }
   }
+  copyFileSync(process.execPath, files.exe);
+}
+
+/** Old executables moved aside by an update; they can be deleted once nothing runs them. */
+function removeOldExes(): void {
+  try {
+    for (const f of readdirSync(home)) if (f.startsWith(`${APP}.exe.old-`)) rmSync(path.join(home, f), { force: true });
+  } catch {}
 }
 
 async function install(): Promise<void> {
