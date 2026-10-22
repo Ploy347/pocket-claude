@@ -36,6 +36,10 @@ The phone app: see `apps/mobile/README.md`.
 - A friend: the owner opens Settings → Invite a person and shows the QR code; the friend scans it with Pocket, picks a name, then adds their computer and links Telegram from Settings. Their chats answer from the Mac without any access to its files.
 - iPhone: `npx expo run:ios --device --configuration Release` in `apps/mobile` on the Mac (Xcode needed); see `apps/mobile/README.md`.
 
+## Voice calls
+
+The phone icon in a chat starts a call: speech is recognised on the phone, a short pause sends the sentence to the same chat, and the reply is read aloud as it streams. The call keeps going with the screen off (iOS background audio). On a call Claude answers in a few spoken sentences and uses the `pc_*` tools for "put this command in my clipboard", "take a screenshot", "read my clipboard". Needs the native modules `expo-speech-recognition`, `expo-speech`, `expo-audio`: rebuild the app after pulling.
+
 ## Telegram Mini App
 
 The same app inside Telegram, served by the Node relay on the Mac over its public HTTPS address (Tailscale Funnel):
@@ -49,4 +53,4 @@ pocket-claude telegram app                   # or: telegram app https://host/  �
 
 ## Roadmap
 
-See `PLAN.md` (in Russian): Windows overlay, multiple users, Telegram bot, Mini App, iPhone — all implemented, all awaiting hands-on acceptance.
+See `PLAN.md` (in Russian): wave 2 — compact overlay with themes, chat-only mode and PC tools for invited people, the permanent Telegram keyboard, iOS performance, brand personas, QR onboarding and voice calls — implemented, awaiting hands-on acceptance.
