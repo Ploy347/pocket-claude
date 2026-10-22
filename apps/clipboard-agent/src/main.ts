@@ -188,12 +188,35 @@ function startHidden(): void {
   else spawn(process.execPath, [...process.execArgv, process.argv[1]!, 'run'], { detached: true, stdio: 'ignore' }).unref();
 }
 
+/**
+ * The running copy keeps its exe locked until it has exited. Wait for it, then stop any leftover copy
+ * (an old version, or another install window) by force; never this process.
+ */
+async function replaceExe(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  let killed = false;
+  for (;;) {
+    try {
+      copyFileSync(process.execPath, files.exe);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if ((code !== 'EPERM' && code !== 'EBUSY') || Date.now() > deadline) throw e;
+      if (!killed && Date.now() > deadline - 11_000) {
+        killed = true;
+        console.log('Stopping the running copy…');
+        spawnSync('taskkill', ['/F', '/FI', `IMAGENAME eq ${APP}.exe`, '/FI', `PID ne ${process.pid}`], { stdio: 'ignore', windowsHide: true });
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}
+
 async function install(): Promise<void> {
   if (!win) throw new Error('install is for Windows');
   mkdirSync(home, { recursive: true });
   await control('quit');
-  await new Promise((r) => setTimeout(r, 500));
-  if (path.resolve(process.execPath).toLowerCase() !== path.resolve(files.exe).toLowerCase()) copyFileSync(process.execPath, files.exe);
+  if (path.resolve(process.execPath).toLowerCase() !== path.resolve(files.exe).toLowerCase()) await replaceExe();
   writeFileSync(files.vbs, `Set sh = CreateObject("WScript.Shell")\r\nsh.Run """${files.exe}"" run", 0, False\r\n`);
   spawnSync('reg', ['add', RUN_KEY, '/v', APP, '/t', 'REG_SZ', '/d', `wscript.exe "${files.vbs}"`, '/f'], { stdio: 'ignore', windowsHide: true });
   console.log(`Installed to ${home} and set to start with Windows.`);
