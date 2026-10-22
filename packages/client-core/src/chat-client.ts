@@ -1,6 +1,8 @@
-import { newMessageId, type ClipboardItem, type Computer, type Project, type Effort, type Identity, type InnerMessageBody, type ModelInfo, type PayloadOf, type PermissionDecision, type ScreenImage, type SessionMeta } from '@pocket/protocol';
+import { newMessageId, type ClipboardItem, type Computer, type Project, type Effort, type Identity, type InnerMessageBody, type ModelInfo, type PayloadOf, type PermissionDecision, type ScreenImage, type SessionEvent, type SessionMeta } from '@pocket/protocol';
 import { DeviceLink, type IncomingMessage, type WebSocketCtor } from '@pocket/transport';
 import { applyEvent, buildThread, type ChatItem } from './thread.js';
+
+const DELTA_INTERVAL_MS = 120;
 
 export type HostStatus = PayloadOf<'host.status'>;
 export type PermissionRequest = PayloadOf<'permission.request'>;
@@ -49,6 +51,8 @@ export interface ChatClientOptions extends ClientCredentials {
   log?: (m: string) => void;
   /** The brain announced a new relay address; persist it so the next start uses it. */
   onRelayMoved?: (url: string) => void;
+  /** How long streamed text is batched before listeners see it (default 120 ms). */
+  deltaIntervalMs?: number;
 }
 
 /** Only http(s) relay addresses are followed. */
@@ -88,6 +92,8 @@ export class ChatClient {
   private readonly link: DeviceLink;
   private state: ChatState = INITIAL;
   private readonly listeners = new Set<(s: ChatState) => void>();
+  /** Streamed text waiting to be applied: deltas are batched so the UI re-renders a few times a second, not on every word. */
+  private pendingDelta: { sessionId: string; text: string; timer: ReturnType<typeof setTimeout> } | null = null;
   private readonly pendingCreate: ((id: string) => void)[] = [];
   private readonly clipboardWaiters = new Map<string, { resolve: (items: ClipboardItem[]) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private readonly screenWaiters = new Map<string, { resolve: (image: ScreenImage) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -129,6 +135,7 @@ export class ChatClient {
   }
 
   close(): void {
+    this.flushDelta();
     for (const w of this.clipboardWaiters.values()) {
       clearTimeout(w.timer);
       w.reject(new Error('Disconnected'));
@@ -414,12 +421,17 @@ export class ChatClient {
         });
       case 'session.event': {
         const { sessionId, event } = message.payload;
-        const thread = this.state.threads[sessionId] ?? [];
-        const patch: Partial<ChatState> = { threads: { ...this.state.threads, [sessionId]: applyEvent(thread, event) } };
-        if (event.kind === 'state') {
-          patch.sessions = this.state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, state: event.state } : s));
+        if (event.kind === 'text_delta') {
+          if (this.pendingDelta?.sessionId === sessionId) {
+            this.pendingDelta.text += event.text;
+            return;
+          }
+          this.flushDelta();
+          this.pendingDelta = { sessionId, text: event.text, timer: setTimeout(() => this.flushDelta(), this.opts.deltaIntervalMs ?? DELTA_INTERVAL_MS) };
+          return;
         }
-        return this.patch(patch);
+        this.flushDelta();
+        return this.applySessionEvent(sessionId, event);
       }
       case 'permission.request':
         if (this.state.permissions.some((p) => p.requestId === message.payload.requestId)) return;
@@ -474,6 +486,23 @@ export class ChatClient {
   private upsertSession(meta: SessionMeta): void {
     const others = this.state.sessions.filter((s) => s.sessionId !== meta.sessionId);
     this.patch({ sessions: sortSessions([...others, meta]) });
+  }
+
+  private applySessionEvent(sessionId: string, event: SessionEvent): void {
+    const thread = this.state.threads[sessionId] ?? [];
+    const patch: Partial<ChatState> = { threads: { ...this.state.threads, [sessionId]: applyEvent(thread, event) } };
+    if (event.kind === 'state') {
+      patch.sessions = this.state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, state: event.state } : s));
+    }
+    this.patch(patch);
+  }
+
+  private flushDelta(): void {
+    const pending = this.pendingDelta;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingDelta = null;
+    this.applySessionEvent(pending.sessionId, { kind: 'text_delta', text: pending.text });
   }
 
   private patch(p: Partial<ChatState>): void {

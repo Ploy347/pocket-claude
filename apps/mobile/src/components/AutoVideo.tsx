@@ -4,9 +4,11 @@ import { useEffect } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 function ActiveVideo({ uri, muted }: { uri: string; muted: boolean }) {
-  const player = useVideoPlayer(uri, (p) => {
+  // Cached on disk: scrolling back to a clip must not download it again.
+  const player = useVideoPlayer({ uri, useCaching: true }, (p) => {
     p.loop = true;
     p.muted = muted;
+    p.staysActiveInBackground = false;
     p.play();
   });
   useEffect(() => {

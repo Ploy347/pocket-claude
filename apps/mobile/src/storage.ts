@@ -70,6 +70,12 @@ export async function loadReplayState(): Promise<Record<string, number> | undefi
   return raw ? (JSON.parse(raw) as Record<string, number>) : undefined;
 }
 
+let lastReplay: string | undefined;
+
+/** Written on a timer, so it skips the write when nothing changed. */
 export function saveReplayState(state: Record<string, number>): Promise<void> {
-  return AsyncStorage.setItem(REPLAY_KEY, JSON.stringify(state));
+  const raw = JSON.stringify(state);
+  if (raw === lastReplay) return Promise.resolve();
+  lastReplay = raw;
+  return AsyncStorage.setItem(REPLAY_KEY, raw);
 }

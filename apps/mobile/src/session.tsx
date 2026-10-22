@@ -180,16 +180,26 @@ export function useSession(): SessionContextValue {
 }
 
 export function useChatState(): ChatState {
+  return useChatSelector((s) => s);
+}
+
+/**
+ * Subscribes to one piece of the state. Screens that only need a count or a list do not re-render on every
+ * streamed word; the selector must return a stable value for unchanged input (a primitive or a field of the state).
+ */
+export function useChatSelector<R>(select: (s: ChatState) => R): R {
   const { client } = useSession();
   const clientRef = useRef(client);
   clientRef.current = client;
+  const selectRef = useRef(select);
+  selectRef.current = select;
   const subscribe = useCallback(
     (cb: () => void) => (client ? client.subscribe(cb) : () => {}),
     [client],
   );
   return useSyncExternalStore(
     subscribe,
-    () => clientRef.current?.getState() ?? EMPTY_STATE,
-    () => EMPTY_STATE,
+    () => selectRef.current(clientRef.current?.getState() ?? EMPTY_STATE),
+    () => selectRef.current(EMPTY_STATE),
   );
 }

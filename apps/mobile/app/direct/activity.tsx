@@ -10,7 +10,7 @@ import { ClaudeAvatar } from '../../src/components/ClaudeAvatar';
 import { effortLabel, modelLabel } from '../../src/commands';
 import { bareToolName, STATE_COLOR, STATE_LABEL, toolIcon, toolSummary } from '../../src/format';
 import { useScreenActive } from '../../src/hooks';
-import { useChatState, useSession } from '../../src/session';
+import { useChatSelector, useChatState, useSession } from '../../src/session';
 import { colors, mono } from '../../src/theme';
 
 const POLL_MS = 1500;
@@ -88,14 +88,14 @@ function BackgroundRow({ task, now }: { task: BackgroundTask; now: number }) {
 }
 
 function AgentCard({ s, now, onOpen }: { s: ActivitySession; now: number; onOpen: () => void }) {
-  const { computers } = useChatState();
+  const computers = useChatSelector((s) => s.computers);
   const computer = computers.find((c) => c.deviceId === s.executorId);
   const agents = s.agents ?? [];
   const background = s.background ?? [];
   const agentToolUses = new Set(agents.map((a) => a.toolUseId).filter(Boolean));
   const ownTools = s.runningTools.filter((t) => !t.parentId && !agentToolUses.has(t.id));
   const orphanTools = s.runningTools.filter((t) => t.parentId && !agents.some((a) => a.toolUseId === t.parentId));
-  const { models } = useChatState();
+  const models = useChatSelector((s) => s.models);
   const meta = [modelLabel(s, models), effortLabel(s), computer?.name].filter(Boolean).join(' · ');
   return (
     <Pressable onPress={onOpen} style={({ pressed }) => [styles.card, pressed && { backgroundColor: colors.surfaceHi }]}>

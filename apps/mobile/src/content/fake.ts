@@ -1,10 +1,9 @@
+/** Short clips of a few MB each: the feed is decoration, it must not eat the battery or the data plan. */
 export const VIDEOS = [
   'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_2MB.mp4',
   'https://test-videos.co.uk/vids/jellyfish/mp4/h264/720/Jellyfish_720_10s_2MB.mp4',
   'https://test-videos.co.uk/vids/sintel/mp4/h264/720/Sintel_720_10s_2MB.mp4',
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-  'https://vjs.zencdn.net/v/oceans.mp4',
-  'https://media.w3.org/2010/05/sintel/trailer.mp4',
   'https://samplelib.com/lib/preview/mp4/sample-10s.mp4',
   'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
   'https://storage.googleapis.com/exoplayer-test-media-0/BigBuckBunny_320x180.mp4',
@@ -44,7 +43,8 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-const SESSION_SEED = Math.floor(Math.random() * 1_000_000);
+// The seed changes once a day, not on every launch: the same pictures come back from the disk cache instead of the network.
+const SESSION_SEED = Math.floor(Date.now() / 86_400_000) % 1_000_000;
 
 function rngFor(scope: string, index: number): () => number {
   let h = SESSION_SEED ^ (index * 2654435761);
@@ -62,7 +62,7 @@ export interface Person {
 }
 
 export const avatarUri = (seed: string) => `https://i.pravatar.cc/150?u=${encodeURIComponent(seed)}`;
-export const imageUri = (seed: string, size = 1080) => `https://picsum.photos/seed/${encodeURIComponent(seed)}/${size}/${size}`;
+export const imageUri = (seed: string, size = 800) => `https://picsum.photos/seed/${encodeURIComponent(seed)}/${size}/${size}`;
 
 function personFor(rng: () => number): Person {
   const username = `${pick(rng, FIRST)}.${pick(rng, SECOND)}${rng() < 0.4 ? Math.floor(rng() * 90 + 10) : ''}`;

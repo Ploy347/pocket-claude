@@ -7,9 +7,9 @@ import { PostCard } from '../../src/components/PostCard';
 import { StoriesRow } from '../../src/components/StoriesRow';
 import { Wordmark } from '../../src/components/Wordmark';
 import { makePosts, makeStories, type Post } from '../../src/content/fake';
-import { usePendingCount } from '../../src/direct';
+import { pendingCount } from '../../src/direct';
 import { useScreenActive } from '../../src/hooks';
-import { useChatState } from '../../src/session';
+import { useChatSelector } from '../../src/session';
 import { colors } from '../../src/theme';
 
 const PAGE = 6;
@@ -18,8 +18,8 @@ const VIEWABILITY = { itemVisiblePercentThreshold: 60 } as const;
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const state = useChatState();
-  const pending = usePendingCount(state);
+  // A number, not the whole state: the feed must not re-render on every streamed word of a chat.
+  const pending = useChatSelector(pendingCount);
   const screenActive = useScreenActive();
   const stories = useMemo(() => makeStories(), []);
   const [posts, setPosts] = useState<Post[]>(() => makePosts(0, PAGE));
