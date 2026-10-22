@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, shrink-to-fit=no" />
+    <meta name="theme-color" content="#000000" />
+    <title>%WEB_TITLE%</title>
+    <!-- Telegram Mini App bridge; it must load before the app. Harmless in a plain browser (platform "unknown"). -->
+    <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+        background: #000;
+      }
+      body {
+        overflow: hidden;
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* Inside Telegram the stable viewport height follows the keyboard and the client's chrome. */
+      #root {
+        display: flex;
+        height: 100%;
+        height: var(--tg-viewport-stable-height, 100%);
+        flex: 1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript> You need to enable JavaScript to run this app. </noscript>
+    <div id="root"></div>
+  </body>
+</html>

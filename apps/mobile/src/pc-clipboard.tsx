@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { ClipboardItem, Computer } from '@pocket/protocol';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from './haptics';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

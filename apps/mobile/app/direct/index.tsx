@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { SessionMeta } from '@pocket/protocol';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../../src/haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { alert } from '../../src/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar } from '../../src/components/Avatar';
 import { ClaudeAvatar } from '../../src/components/ClaudeAvatar';
@@ -152,11 +153,11 @@ export default function DirectInbox() {
     (session: SessionMeta) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const remove = () =>
-        Alert.alert('Delete this chat?', 'The conversation is erased on the Mac too. This cannot be undone.', [
+        alert('Delete this chat?', 'The conversation is erased on the Mac too. This cannot be undone.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Delete', style: 'destructive', onPress: () => client?.deleteSession(session.sessionId) },
         ]);
-      Alert.alert(session.lastText?.replace(/\s+/g, ' ').slice(0, 60) || 'Chat', undefined, [
+      alert(session.lastText?.replace(/\s+/g, ' ').slice(0, 60) || 'Chat', undefined, [
         { text: 'Cancel', style: 'cancel' },
         { text: session.hidden ? 'Unhide' : 'Hide', onPress: () => client?.hideSession(session.sessionId, !session.hidden) },
         { text: 'Delete', style: 'destructive', onPress: remove },

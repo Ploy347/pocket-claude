@@ -3,7 +3,7 @@ import { deserializeIdentity, serializeIdentity, type PairingCode } from '@pocke
 import { joinAccount } from '@pocket/transport';
 import * as Device from 'expo-device';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import {
   loadCredentials,
   loadReplayState,
@@ -14,8 +14,17 @@ import {
   wipeAll,
   type StoredCredentials,
 } from './storage';
+import { telegramWebApp } from './telegram';
 
 type Phase = 'loading' | 'unpaired' | 'paired';
+
+/** How the Mac lists this device: the phone model, or the Telegram client the Mini App runs in. */
+function deviceName(): string {
+  const tg = telegramWebApp();
+  if (tg) return `Telegram ${tg.platform}`;
+  if (Platform.OS === 'web') return 'Web browser';
+  return Device.modelName ?? (Platform.OS === 'ios' ? 'iPhone' : 'Android phone');
+}
 
 interface SessionContextValue {
   phase: Phase;
@@ -136,7 +145,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       relayUrl,
       code,
       role: 'client',
-      name: Device.modelName ?? 'Android phone',
+      name: deviceName(),
       ...(userName ? { userName } : {}),
     });
     const next: StoredCredentials = {

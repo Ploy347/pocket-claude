@@ -23,7 +23,7 @@ const REPLAY_KEY = 'pc.replay';
 const MAX_CACHED_THREADS = 30;
 const MAX_CACHED_ITEMS = 150;
 
-/** expo-secure-store has no web implementation; the browser build (dev preview only) falls back to AsyncStorage. */
+/** expo-secure-store has no web implementation; the web build (the Telegram Mini App) keeps credentials in localStorage. */
 const secrets =
   Platform.OS === 'web'
     ? { getItemAsync: AsyncStorage.getItem, setItemAsync: AsyncStorage.setItem, deleteItemAsync: AsyncStorage.removeItem }

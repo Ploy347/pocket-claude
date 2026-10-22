@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { MAC_DEVICE_ID, type Computer, type Project } from '@pocket/protocol';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../../src/haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { alert } from '../../src/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScreenActive } from '../../src/hooks';
 import { useChatState, useSession } from '../../src/session';
@@ -168,7 +169,7 @@ export default function ComputersScreen() {
   };
 
   const remove = (c: Computer) =>
-    Alert.alert(`Remove ${c.name}?`, 'It is unpaired. To use it again, pair it with a new code.', [
+    alert(`Remove ${c.name}?`, 'It is unpaired. To use it again, pair it with a new code.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: () => client?.removeComputer(c.deviceId) },
     ]);

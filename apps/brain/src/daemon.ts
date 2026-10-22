@@ -272,13 +272,22 @@ export class Brain {
 
   /** Turns the Telegram bot on (token + username from getMe) or off; phones learn about it through the status. */
   configureTelegram(config: { token: string; username: string } | null): void {
-    if (config) this.state.telegram = config;
+    if (config) this.state.telegram = { ...config, ...(this.state.telegram?.appUrl ? { appUrl: this.state.telegram.appUrl } : {}) };
     else delete this.state.telegram;
     this.persistNow();
     this.broadcastStatus();
   }
 
-  get telegram(): { token: string; username: string } | undefined {
+  /** Where the bot sends people for the Mini App (`null` removes the menu button); needs a configured bot. */
+  configureTelegramApp(url: string | null): string | null {
+    if (!this.state.telegram) throw new Error('Set up the bot first: pocket-claude telegram <token>');
+    if (url) this.state.telegram.appUrl = url;
+    else delete this.state.telegram.appUrl;
+    this.persistNow();
+    return this.state.telegram.appUrl ?? null;
+  }
+
+  get telegram(): { token: string; username: string; appUrl?: string } | undefined {
     return this.state.telegram;
   }
 

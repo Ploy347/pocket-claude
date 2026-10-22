@@ -10,6 +10,7 @@
     "newArchEnabled": true,
     "platforms": [
       "android",
+      "ios",
       "web"
     ],
     "icon": "./assets/icon.png",
@@ -40,13 +41,19 @@
         }
       ]
     },
+    "ios": {
+      "bundleIdentifier": "dev.pocketclaude.app",
+      "supportsTablet": false,
+      "icon": "./assets/icon.png"
+    },
     "plugins": [
       "expo-router",
       "expo-secure-store",
       [
         "expo-camera",
         {
-          "cameraPermission": "Pocket uses the camera to scan the pairing QR code."
+          "cameraPermission": "Pocket uses the camera to scan the pairing QR code.",
+          "microphonePermission": false
         }
       ],
       [

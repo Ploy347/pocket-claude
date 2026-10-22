@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { Effort, ModelInfo, SessionMeta } from '@pocket/protocol';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../haptics';
 import { Image } from 'expo-image';
 import { useMemo, useRef, useState, type ComponentRef } from 'react';
-import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { alert } from '../alert';
 import { attachmentChars, fromClipboard, MAX_ATTACHMENT_CHARS, MAX_ATTACHMENTS, pickPhotos, previewUri, type Attachment } from '../attachments';
 import { usePcClipboard } from '../pc-clipboard';
 import { effortLabel, modelLabel, parseSlash, resolveEffort, resolveModel, suggestionsFor, type CommandName, type Suggestion } from '../commands';
@@ -84,7 +85,7 @@ export function ClaudeComposer({
 
   const askPhotoSource = () => {
     Keyboard.dismiss();
-    Alert.alert('Add a photo', undefined, [
+    alert('Add a photo', undefined, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Gallery', onPress: () => attach('library') },
       { text: 'Camera', onPress: () => attach('camera') },
@@ -110,7 +111,7 @@ export function ClaudeComposer({
       case 'stop':
         return actions.stop();
       case 'kill':
-        return Alert.alert('Stop everything?', 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.', [
+        return alert('Stop everything?', 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Stop everything', style: 'destructive', onPress: actions.kill },
         ]);

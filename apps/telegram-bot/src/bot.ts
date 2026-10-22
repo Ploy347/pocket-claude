@@ -1,4 +1,4 @@
-import { ChatClient, shortToolName, type ChatItem, type ChatState, type PermissionRequest } from '@pocket/client-core';
+import { ChatClient, shortToolName, type ChatItem, type ChatState, type PairingTicket, type PermissionRequest } from '@pocket/client-core';
 import { deserializeIdentity, parsePairingCode, serializeIdentity, type ClipboardItem, type Computer, type PermissionDecision, type SessionMeta } from '@pocket/protocol';
 import { joinAccount, type WebSocketCtor } from '@pocket/transport';
 import { Bot, GrammyError, InlineKeyboard, InputFile, Keyboard, type Context } from 'grammy';
@@ -12,6 +12,8 @@ export interface PocketBotOptions {
   token: string;
   /** Relay the bot's client devices connect through; the Mac's own relay address when the bot runs on the Mac. */
   relayUrl: string;
+  /** Where the Mini App (the web build of the phone app) is served; enables the menu button and `/app`. */
+  appUrl?: string;
   store: BotStore;
   log: (m: string) => void;
   WebSocket?: WebSocketCtor;
@@ -73,7 +75,7 @@ export class PocketBot {
   /** Long polling; returns when the bot stops. */
   async start(): Promise<void> {
     this.persistTimer = setInterval(() => this.persist(), 30_000);
-    await this.registerCommands();
+    await this.announce();
     await this.bot.start({ onStart: (me) => this.opts.log(`telegram: @${me.username} polling, ${this.linked.size} linked`) });
   }
 
@@ -89,13 +91,17 @@ export class PocketBot {
     return this.linked.size;
   }
 
-  private async registerCommands(): Promise<void> {
-    const order = ['new', 'chats', 'stop', 'status', 'pc', 'unlink', 'help'] as const;
+  /** The command list and the menu button: the Mini App when one is configured, Telegram's default otherwise. */
+  async announce(): Promise<void> {
+    const order = (['new', 'chats', 'stop', 'status', 'pc', 'app', 'unlink', 'help'] as const).filter((c) => c !== 'app' || this.opts.appUrl);
     try {
       await this.bot.api.setMyCommands(order.map((command) => ({ command, description: STRINGS.en.commands[command] })));
       await this.bot.api.setMyCommands(order.map((command) => ({ command, description: STRINGS.ru.commands[command] })), { language_code: 'ru' });
+      await this.bot.api.setChatMenuButton({
+        menu_button: this.opts.appUrl ? { type: 'web_app', text: STRINGS.en.menuButton, web_app: { url: this.opts.appUrl } } : { type: 'default' },
+      });
     } catch (e) {
-      this.opts.log(`telegram: setMyCommands failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.opts.log(`telegram: announcing commands failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -138,6 +144,7 @@ export class PocketBot {
     bot.command('new', (ctx) => this.withLinked(ctx, (l, t) => this.newChat(ctx, l, t, ctx.match)));
     bot.command('chats', (ctx) => this.withLinked(ctx, (l, t) => this.listChats(ctx, l, t)));
     bot.command('stop', (ctx) => this.withLinked(ctx, (l, t) => this.stopChat(ctx, l, t)));
+    bot.command('app', (ctx) => this.withLinked(ctx, (l, t) => this.openApp(ctx, l, t)));
     bot.command('help', (ctx) => ctx.reply(this.t(ctx).help, { reply_markup: this.keyboard(this.t(ctx)) }));
     bot.callbackQuery(/^pc:(.+)$/, (ctx) =>
       this.withLinked(ctx, async (l, t) => {
@@ -410,6 +417,43 @@ export class PocketBot {
       }),
       { reply_markup: this.keyboard(t) },
     );
+  }
+
+  // ---- Mini App ----
+
+  /** A one-tap way in: the button carries a fresh pairing code, so the app joins as another device of this person. */
+  private async openApp(ctx: Context, l: Linked, t: Strings): Promise<void> {
+    if (!this.opts.appUrl) return void (await ctx.reply(t.noApp));
+    const state = await this.ready(l);
+    if (!state.brainOnline) return void (await ctx.reply(t.macOffline));
+    const ticket = await this.pairingTicket(l);
+    const url = new URL(this.opts.appUrl);
+    url.searchParams.set('code', ticket.code);
+    await ctx.reply(t.openApp, { reply_markup: new InlineKeyboard().webApp(t.openAppButton, url.toString()) });
+  }
+
+  /** The brain's codes are role-agnostic: `computer.pair` answers with one the Mini App can join with as a client. */
+  private pairingTicket(l: Linked): Promise<PairingTicket> {
+    return new Promise((resolve, reject) => {
+      const stop = () => {
+        clearTimeout(timer);
+        unsubscribe();
+      };
+      const timer = setTimeout(() => {
+        stop();
+        reject(new Error('the Mac did not answer'));
+      }, READY_TIMEOUT_MS);
+      const unsubscribe = l.client.subscribe((s) => {
+        if (!s.pairing) return;
+        stop();
+        resolve(s.pairing);
+        l.client.clearPairing();
+      });
+      if (!l.client.pairComputer()) {
+        stop();
+        reject(new Error('not connected'));
+      }
+    });
   }
 
   // ---- chat with Claude ----

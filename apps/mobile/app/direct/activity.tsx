@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { ActivitySession, BackgroundTask, RunningTool, Subagent } from '@pocket/protocol';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../../src/haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { alert } from '../../src/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ClaudeAvatar } from '../../src/components/ClaudeAvatar';
 import { effortLabel, modelLabel } from '../../src/commands';
@@ -179,7 +180,7 @@ export default function ActivityScreen() {
   const workspaces = activity?.executor.workspaces ?? state.host?.workspaces ?? [];
 
   const stopEverything = () =>
-    Alert.alert('Stop everything?', 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.', [
+    alert('Stop everything?', 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Stop everything',

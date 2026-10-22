@@ -1,13 +1,16 @@
 import { parsePairingUri, type PairingCode } from '@pocket/protocol';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../src/haptics';
 import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Wordmark } from '../src/components/Wordmark';
 import { useSession } from '../src/session';
+import { forgetLaunchCode, launchPairing, telegramWebApp, type LaunchPairing } from '../src/telegram';
 import { colors, mono, radius, space } from '../src/theme';
+
+const telegram = telegramWebApp();
 
 export default function PairScreen() {
   const insets = useSafeAreaInsets();
@@ -23,14 +26,13 @@ export default function PairScreen() {
   const [userName, setUserName] = useState('');
   const handling = useRef(false);
 
-  const join = useCallback(
-    async (uri: string) => {
+  const joinParsed = useCallback(
+    async (parsed: LaunchPairing & { invite?: boolean }) => {
       if (handling.current) return;
       handling.current = true;
       setBusy(true);
       setError(null);
       try {
-        const parsed = parsePairingUri(uri.trim());
         if (parsed.invite) {
           setInvite({ relayUrl: parsed.relayUrl, code: parsed.code });
           setBusy(false);
@@ -49,6 +51,41 @@ export default function PairScreen() {
     },
     [pair],
   );
+
+  const join = useCallback(
+    async (uri: string) => {
+      let parsed;
+      try {
+        parsed = parsePairingUri(uri.trim());
+      } catch (e) {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        setError(e instanceof Error ? e.message : 'Not a pairing link');
+        return;
+      }
+      await joinParsed(parsed);
+    },
+    [joinParsed],
+  );
+
+  // Opened from the bot's /app button or a startapp link: the code is in the address, pairing needs no scanning.
+  useEffect(() => {
+    const launch = launchPairing();
+    if (!launch) return;
+    forgetLaunchCode();
+    void joinParsed(launch);
+  }, [joinParsed]);
+
+  const scanWithTelegram = () => {
+    telegram?.showScanQrPopup({ text: 'Scan the code from pocket-claude pair' }, (data) => {
+      try {
+        parsePairingUri(data.trim());
+      } catch {
+        return false;
+      }
+      void join(data);
+      return true;
+    });
+  };
 
   const register = useCallback(async () => {
     const name = userName.trim();
@@ -73,7 +110,7 @@ export default function PairScreen() {
     }
   }, [params.code, params.relay, params.invite, join]);
 
-  const showCamera = mode === 'scan' && permission?.granted === true && !busy;
+  const showCamera = mode === 'scan' && permission?.granted === true && !busy && !telegram;
 
   if (invite) {
     const ready = userName.trim().length > 0 && !busy;
@@ -139,6 +176,13 @@ export default function PairScreen() {
               <View style={styles.center}>
                 <ActivityIndicator color={colors.text} />
                 <Text style={styles.hint}>Pairing with your Mac…</Text>
+              </View>
+            ) : telegram ? (
+              <View style={styles.center}>
+                <Pressable onPress={scanWithTelegram} style={styles.secondary}>
+                  <Text style={styles.secondaryText}>Scan with Telegram</Text>
+                </Pressable>
+                <Text style={styles.hint}>Or send /app to the bot: its button pairs this app in one tap.</Text>
               </View>
             ) : permission && !permission.granted ? (
               <View style={styles.center}>

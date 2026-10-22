@@ -1,7 +1,7 @@
 /** Bot texts. Telegram tells us each user's language; Russian speakers get Russian, everyone else English. */
 export interface Strings {
   buttons: { read: string; text: string; photo: string; chats: string; pc: string; status: string };
-  commands: { new: string; chats: string; stop: string; status: string; pc: string; unlink: string; help: string };
+  commands: { new: string; chats: string; stop: string; status: string; pc: string; app: string; unlink: string; help: string };
   notLinked: string;
   badCode: string;
   linking: string;
@@ -40,13 +40,18 @@ export interface Strings {
   allowedSession: string;
   denied: string;
   resolvedElsewhere: string;
+  /** Mini App: the menu button's label and the `/app` reply with its one-tap pairing button. */
+  menuButton: string;
+  noApp: string;
+  openApp: string;
+  openAppButton: string;
   status: (s: { user: string; owner: boolean; macOnline: boolean; claude: string | undefined; computers: { name: string; online: boolean; current: boolean; clipboard: boolean }[] }) => string;
   help: string;
 }
 
 const en: Strings = {
   buttons: { read: '📋 Clipboard → here', text: '📥 Text → clipboard', photo: '🖼 Photo → clipboard', chats: '💬 Chats', pc: '🖥 Computer', status: 'ℹ️ Status' },
-  commands: { new: 'New chat with Claude', chats: 'Pick a chat', stop: 'Stop the current reply', status: 'Mac and computers', pc: 'Pick the clipboard computer', unlink: 'Unlink this Telegram account', help: 'What the buttons do' },
+  commands: { new: 'New chat with Claude', chats: 'Pick a chat', stop: 'Stop the current reply', status: 'Mac and computers', pc: 'Pick the clipboard computer', app: 'Open Pocket inside Telegram', unlink: 'Unlink this Telegram account', help: 'What the buttons do' },
   notLinked: 'This bot is not linked to your Pocket yet.\nOn the phone open Settings → Telegram → Link, then tap the link it opens.',
   badCode: 'That link has expired or is not a Pocket link. Make a new one on the phone: Settings → Telegram → Link.',
   linking: 'Linking with the Mac…',
@@ -85,6 +90,10 @@ const en: Strings = {
   allowedSession: '✅ Allowed for this chat',
   denied: '❌ Denied',
   resolvedElsewhere: 'Answered on another device.',
+  menuButton: 'Pocket',
+  noApp: 'The Mini App is not set up on the Mac yet: pocket-claude telegram app <https url>.',
+  openApp: 'The button opens Pocket inside Telegram and pairs it as another device of yours. It works once, within 5 minutes; send /app again for a new one.',
+  openAppButton: '📱 Open Pocket',
   status: (s) =>
     [
       `You: ${s.user}${s.owner ? ' (owner)' : ''}`,
@@ -92,12 +101,12 @@ const en: Strings = {
       s.computers.length ? 'Computers:' : 'Computers: none',
       ...s.computers.map((c) => `  ${c.online ? '●' : '○'} ${c.name}${c.current ? ' ✓' : ''}${c.clipboard ? '' : ' (no clipboard)'}`),
     ].join('\n'),
-  help: 'Buttons below: get what is on the PC clipboard, or put text and photos there. /new starts a chat with Claude; then plain messages and photos go to it. /chats, /stop, /status, /pc, /unlink.',
+  help: 'Buttons below: get what is on the PC clipboard, or put text and photos there. /new starts a chat with Claude; then plain messages and photos go to it. /chats, /stop, /status, /pc, /app (Pocket inside Telegram), /unlink.',
 };
 
 const ru: Strings = {
   buttons: { read: '📋 Буфер → сюда', text: '📥 Текст → в буфер', photo: '🖼 Фото → в буфер', chats: '💬 Чаты', pc: '🖥 Компьютер', status: 'ℹ️ Статус' },
-  commands: { new: 'Новый чат с Claude', chats: 'Выбрать чат', stop: 'Остановить текущий ответ', status: 'Mac и компьютеры', pc: 'Выбрать компьютер для буфера', unlink: 'Отвязать этот Telegram', help: 'Что делают кнопки' },
+  commands: { new: 'Новый чат с Claude', chats: 'Выбрать чат', stop: 'Остановить текущий ответ', status: 'Mac и компьютеры', pc: 'Выбрать компьютер для буфера', app: 'Открыть Pocket внутри Telegram', unlink: 'Отвязать этот Telegram', help: 'Что делают кнопки' },
   notLinked: 'Бот ещё не привязан к твоему Pocket.\nНа телефоне: Настройки → Telegram → Link, затем нажми на открывшуюся ссылку.',
   badCode: 'Ссылка устарела или это не ссылка Pocket. Сделай новую на телефоне: Настройки → Telegram → Link.',
   linking: 'Привязываю к Mac…',
@@ -136,6 +145,10 @@ const ru: Strings = {
   allowedSession: '✅ Разрешено для этого чата',
   denied: '❌ Запрещено',
   resolvedElsewhere: 'Решено на другом устройстве.',
+  menuButton: 'Pocket',
+  noApp: 'Mini App ещё не настроено на Mac: pocket-claude telegram app <https url>.',
+  openApp: 'Кнопка открывает Pocket внутри Telegram и привязывает его как ещё одно твоё устройство. Работает один раз, в течение 5 минут; за новой — снова /app.',
+  openAppButton: '📱 Открыть Pocket',
   status: (s) =>
     [
       `Ты: ${s.user}${s.owner ? ' (владелец)' : ''}`,
@@ -143,7 +156,7 @@ const ru: Strings = {
       s.computers.length ? 'Компьютеры:' : 'Компьютеры: нет',
       ...s.computers.map((c) => `  ${c.online ? '●' : '○'} ${c.name}${c.current ? ' ✓' : ''}${c.clipboard ? '' : ' (без буфера)'}`),
     ].join('\n'),
-  help: 'Кнопки внизу: забрать то, что в буфере на ПК, или положить туда текст и фото. /new начинает чат с Claude — дальше обычные сообщения и фото идут ему. /chats, /stop, /status, /pc, /unlink.',
+  help: 'Кнопки внизу: забрать то, что в буфере на ПК, или положить туда текст и фото. /new начинает чат с Claude — дальше обычные сообщения и фото идут ему. /chats, /stop, /status, /pc, /app (Pocket внутри Telegram), /unlink.',
 };
 
 export const STRINGS: Record<'en' | 'ru', Strings> = { en, ru };

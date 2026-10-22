@@ -12,7 +12,7 @@ process.env.POCKET_HOME = home;
 process.env.POCKET_LOG_DIR = join(home, 'logs');
 process.env.POCKET_NO_KEYCHAIN = '1';
 
-const { generateIdentity, parsePairingUri } = await import('@pocket/protocol');
+const { generateIdentity, parsePairingCode, parsePairingUri } = await import('@pocket/protocol');
 const { DeviceLink, joinAccount } = await import('@pocket/transport');
 const { startNodeRelay } = await import('../../relay/src/node-server.js');
 const { Brain } = await import('../../brain/src/daemon.js');
@@ -272,5 +272,40 @@ describe('PocketBot', () => {
     await third.bot.handleUpdate(command('start', linking.payload.code));
     expect(tg3.last()).toMatch(/^Linked as/);
     await third.stop();
+  });
+
+  it('announces the Mini App as the menu button and pairs it through /app', async () => {
+    const ticket = await published(brain.startPairing(undefined, { userId: OWNER_ID }));
+    const bot = new PocketBot({ token: '1:test', relayUrl: relay.url, appUrl: 'https://mac.example/', store: memoryStore(), log: () => {}, WebSocket: WS, botInfo: ME });
+    const tg = fakeTelegram(bot);
+    await bot.announce();
+    expect(tg.calls.find((c) => c.method === 'setChatMenuButton')?.payload.menu_button).toEqual({ type: 'web_app', text: 'Pocket', web_app: { url: 'https://mac.example/' } });
+    expect((tg.calls.find((c) => c.method === 'setMyCommands')?.payload.commands as { command: string }[]).map((c) => c.command)).toContain('app');
+
+    await bot.bot.handleUpdate(command('app'));
+    expect(tg.last()).toMatch(/not linked/);
+    await bot.bot.handleUpdate(command('start', ticket.code));
+    expect(tg.last()).toMatch(/^Linked as/);
+    await bot.bot.handleUpdate(command('app'));
+    expect(tg.last()).toMatch(/opens Pocket inside Telegram/);
+    const markup = tg.calls.filter((c) => c.method === 'sendMessage').pop()?.payload.reply_markup as { inline_keyboard: { text: string; web_app: { url: string } }[][] };
+    const button = markup.inline_keyboard[0]?.[0];
+    expect(button?.text).toBe('📱 Open Pocket');
+    expect(button?.web_app.url).toMatch(/^https:\/\/mac\.example\/\?code=[A-Z2-7-]+$/);
+
+    // The Mini App joins with that code and lands with the same person as the bot.
+    const code = new URL(button!.web_app.url).searchParams.get('code')!;
+    const joined = await joinAccount({ relayUrl: relay.url, code: parsePairingCode(code), role: 'client', name: 'Telegram android' });
+    const devices = brain.status().devices;
+    expect(devices.find((d) => d.deviceId === joined.deviceId)?.user).toBe(devices.find((d) => d.name === 'Telegram @masha')?.user);
+    await bot.stop();
+
+    // Without a Mini App the menu button goes back to Telegram's default and /app is not listed.
+    const plain = new PocketBot({ token: '1:test', relayUrl: relay.url, store: memoryStore(), log: () => {}, WebSocket: WS, botInfo: ME });
+    const tgPlain = fakeTelegram(plain);
+    await plain.announce();
+    expect(tgPlain.calls.find((c) => c.method === 'setChatMenuButton')?.payload.menu_button).toEqual({ type: 'default' });
+    expect((tgPlain.calls.find((c) => c.method === 'setMyCommands')?.payload.commands as { command: string }[]).map((c) => c.command)).not.toContain('app');
+    await plain.stop();
   });
 });

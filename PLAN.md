@@ -1,6 +1,6 @@
 # План развития Pocket Claude
 
-Статус: **подтверждён 2026-10-22**. Код готов: этап 1 (PR #1), этап 2 (PR #2), этап 3 (PR #3), этап 4 (PR #4). Все ждут приёмки. Документ живой: после каждого этапа здесь отмечается, что сделано и что дальше.
+Статус: **подтверждён 2026-10-22**. Код готов: этап 1 (PR #1), этап 2 (PR #2), этап 3 (PR #3), этап 4 (PR #4), этапы 5 (Mini App) и 6 (iPhone) — ветка `hoplite/kolophon-9157b0b1`. Все ждут приёмки. Документ живой: после каждого этапа здесь отмечается, что сделано и что дальше.
 
 ## Что осталось (2026-10-22)
 
@@ -16,8 +16,12 @@
    - [ ] пересобрать `PocketClipboard.exe` с оверлеем (`bash tools/scripts/make-usb.sh`) и поставить поверх на ноутбук;
    - [ ] собрать и поставить APK по USB;
    - [ ] создать бота у @BotFather и включить его: `pocket-claude telegram <token>`, привязать из телефона (Настройки → Telegram).
-3. **Этап 5 — Mini App** (L) — не начат.
-4. **Этап 6 — iPhone** (M) — не начат.
+3. **Этап 5 — Mini App** (L) — код готов (5.1–5.3), ждёт приёмки в Telegram (5.4, чек-лист в разделе этапа):
+   - [ ] на Mac: `pnpm --filter @pocket/mobile export:web`, перезапустить relay, `pocket-claude telegram app`;
+   - [ ] в Telegram: кнопка меню «Pocket», `/app` → приложение открывается и само привязывается; чат с Claude, разрешения, буфер.
+4. **Этап 6 — iPhone** (M) — конфигурация готова (6.1, 6.3), ждёт сборки и прогона на iPhone (6.2, чек-лист в разделе этапа):
+   - [ ] на Mac: Xcode + CocoaPods, `npx expo run:ios --device --configuration Release` в `apps/mobile`;
+   - [ ] на iPhone: пейринг, Face ID, чат, клавиатура, разрешения, «To PC».
 
 ## Как работаем
 
@@ -219,20 +223,50 @@
 5. `/chats` → список, выбрать чат с телефона → «Chat: …», следующее сообщение уходит в него. `/stop` во время генерации останавливает.
 6. Не-владелец без своего ПК: сообщение → «⚠ Add a computer first…» вместо ответа.
 
-### Этап 5 — Mini App (L)
+### Этап 5 — Mini App (L) — код готов, ждёт приёмки в Telegram
 
-- [ ] 5.1 Web-сборка приложения: аудит экранов (Reanimated, expo-video, роутер), исправления.
-- [ ] 5.2 Адаптеры Telegram WebApp: хранилище, биометрия, QR, хаптика, тема, safe area, `startapp`.
-- [ ] 5.3 Раздача статики Node-relay (или Cloudflare Pages), кнопка меню бота, deep link.
-- [ ] 5.4 Проверка в Telegram Android / iOS / Desktop.
+- [x] 5.1 Web-сборка: `expo export --platform web` собирается (`pnpm --filter @pocket/mobile export:web` → `apps/mobile/dist`), экраны пейринга, ленты и Direct проверены в браузере на ширине телефона. Найдено и исправлено: у react-native-web нет `Alert` — все подтверждения («Удалить чат?», «Остановить всё?», выбор фото) на web молча не работали; теперь `src/alert.ts` (попап Telegram внутри Mini App, диалоги браузера снаружи).
+- [x] 5.2 Адаптеры Telegram (`src/telegram.ts`, подключается в `public/index.html` скриптом `telegram-web-app.js`): хранилище — localStorage (ключи устройства **не** уходят в CloudStorage Telegram, чтобы сквозное шифрование не зависело от Telegram); блокировка — `BiometricManager` на Android/iOS (с таймаутом: Desktop/Web на запросы биометрии не отвечают → без блокировки); QR — `showScanQrPopup`; хаптика — `HapticFeedback`; `expand()`, тёмные цвета шапки/фона, `disableVerticalSwipes`, кнопка «Назад» Telegram, safe area из `safeAreaInset + contentSafeAreaInset`, стабильная высота viewport через CSS-переменную; `startapp`/`?code=` — код пейринга из адреса, приложение привязывается само; устройство называется «Telegram android/ios/tdesktop…». Приглашение уходит через шару Telegram, ссылка на бота открывается внутри Telegram.
+- [x] 5.3 Хостинг с Mac: Node-relay раздаёт `apps/mobile/dist` рядом со своим API (SPA-фолбэк на `index.html`, хэшированные бандлы кэшируются на год, выход за папку невозможен; `STATIC_DIR=` выключает). `pocket-claude telegram app [url|off]` — адрес Mini App (по умолчанию публичный адрес relay): бот ставит кнопку меню «Pocket» (`setChatMenuButton`), а `/app` присылает web_app-кнопку с одноразовым кодом пейринга — приложение открывается внутри Telegram и становится ещё одним устройством того же человека. Тесты: `apps/relay/test/static.test.ts`, `/app` в `bot.test.ts`, хелперы в `apps/mobile/test/telegram.test.ts`.
+- [ ] 5.4 Приёмка в Telegram Android / iOS / Desktop (чек-лист ниже).
+
+**Проверка здесь:** `pnpm test`, `pnpm typecheck`, `expo export --platform web` (теперь и в CI), браузер на ширине 390 px с эмуляцией Telegram (`#tgWebAppPlatform=android`): пейринг по `?code=` проходит end-to-end через настоящие relay и brain, устройство «Telegram android» появляется у brain; лента и Direct рендерятся.
+
+**Чек-лист приёмки (от тебя):**
+
+1. На Mac после `git pull`: `pnpm install`, `pnpm --filter @pocket/mobile export:web`, перезапуск relay (`launchctl kickstart -k gui/$UID/com.pocketclaude.relay`). В браузере открыть публичный адрес relay (`https://…ts.net:10000/`) → экран пейринга Pocket.
+2. `pocket-claude telegram app` (подставит публичный адрес relay; или `telegram app https://…`). В чате с ботом слева от поля ввода появляется кнопка меню «Pocket» (если нет — перезапустить Telegram, он кэширует меню).
+3. `/app` в боте → «📱 Открыть Pocket» → приложение открывается внутри Telegram и само проходит пейринг (без сканирования). `pocket-claude status` показывает устройство «Telegram android» у тебя.
+4. В Mini App: Direct → Lipton → сообщение → ответ стримится; действие с инструментом → карточка разрешения, кнопки работают; «To PC» кладёт текст в буфер Windows.
+5. Блокировка: при первом открытии Telegram спрашивает разрешение на биометрию → отпечаток/Face ID открывает приложение; в Настройках переключатель биометрии работает. На Telegram Desktop блокировки нет (так задумано).
+6. Кнопка «Назад» Telegram в шапке возвращает на предыдущий экран; закрыть Mini App и открыть снова через кнопку меню → остаёшься привязанным (localStorage). Если Telegram очистил хранилище — снова `/app`.
+7. iOS: при фокусе в поле ввода композер остаётся над клавиатурой, страница не «уезжает». Если уезжает — пришли платформу/версию Telegram, это известный риск WebView iOS.
+8. Настройки → «Invite a person» → открывается шара Telegram с ссылкой; «Link @бот» → открывается чат с ботом.
+9. Telegram Desktop: кнопка меню открывает приложение; без кода — «Scan with Telegram» на Desktop не работает (нет сканера), пользуйся `/app` или «Paste link».
+10. По желанию: BotFather → `/newapp` → короткое имя → ссылка `t.me/<бот>/<app>?startapp=<код>` тоже привязывает (код = тот, что печатает `pocket-claude pair`, через дефисы).
 
 **От тебя:** HTTPS-адрес (есть Tailscale Funnel) и проверка на своих клиентах Telegram.
 
-### Этап 6 — iPhone (M по пути А)
+### Этап 6 — iPhone (M по пути А) — конфигурация готова, ждёт сборки на Mac и прогона на iPhone
 
-- [ ] 6.1 iOS-таргет в `app.json`: bundle id, иконки, разрешения, scheme.
-- [ ] 6.2 Прогон экранов на iPhone: safe area, клавиатура, Face ID, Keychain.
-- [ ] 6.3 Сборка на Mac (`expo run:ios`) / EAS, инструкция; TestFlight при наличии аккаунта разработчика.
+- [x] 6.1 iOS-таргет в `app.json`: `ios` в `platforms`, `bundleIdentifier: dev.pocketclaude.app`, только iPhone (без iPad), иконка `assets/icon.png` (непрозрачная — для iOS это обязательно), портрет, тёмная тема. Тексты разрешений дают плагины: Face ID («Unlock Pocket.»), камера (QR), фотогалерея; микрофон убран из обоих плагинов — приложение его не использует. Схема `pocketclaude://` попадает в `CFBundleURLTypes`, ссылка пейринга открывает приложение. Проверено здесь генерацией проекта: `expo prebuild --platform ios --no-install` проходит, в `Info.plist` — ровно эти ключи, `IPHONEOS_DEPLOYMENT_TARGET 16.4`, `TARGETED_DEVICE_FAMILY 1`; `ios/` не коммитится (генерируется на Mac).
+- [x] 6.3 Сборка: инструкция в `apps/mobile/README.md` (Xcode, CocoaPods, Developer Mode на iPhone, `npx expo run:ios --device --configuration Release`, подпись бесплатным Apple ID — 7 дней, доверие сертификату). `eas.json` с профилями development / preview / production для облачной сборки и TestFlight при наличии Apple Developer Program.
+- [ ] 6.2 Прогон на iPhone по чек-листу ниже.
+
+**Аудит кода под iOS (здесь):** `KeyboardAvoidingView` с `padding` на экранах чата и пейринга; safe area через `react-native-safe-area-context` (таб-бар и шапки учитывают `insets`); блокировка — `expo-local-authentication` (Face ID, фолбэк на код-пароль) и Keychain через `expo-secure-store` без изменений; модальные экраны (`activity`, `computers`) на iOS откроются листом (`presentation: modal`); имя устройства — модель iPhone. Ничего iOS-специфичного в логике не потребовалось. Прямой запуск здесь невозможен (нет macOS/Xcode).
+
+**Чек-лист приёмки на iPhone (от тебя):**
+
+1. На Mac: Xcode из App Store (открыть один раз, принять лицензию), `xcode-select --install`, `brew install cocoapods`, Apple ID в Xcode → Settings → Accounts. На iPhone: Settings → Privacy & Security → Developer Mode.
+2. `cd apps/mobile && npx expo run:ios --device --configuration Release` → выбрать iPhone → первая сборка 10–20 минут (CocoaPods + Xcode). На вопрос о команде подписи — личная команда Apple ID. После установки: Settings → General → VPN & Device Management → доверять.
+3. Открыть Pocket → экран пейринга → `pocket-claude pair` на Mac → сканировать QR → лента. `pocket-claude status` показывает устройство «iPhone …». Альтернатива: открыть ссылку `pocketclaude://pair?…` на iPhone (из Заметок/Сообщений) → приложение открывается само на пейринге.
+4. Закрыть приложение, открыть снова → Face ID (первый раз — запрос разрешения с текстом «Unlock Pocket.»). Переключатель биометрии в Настройках работает; выключение требует Face ID.
+5. Direct → Lipton → сообщение → ответ стримится; фокус в поле ввода → композер поднимается над клавиатурой, список не перекрыт; поворот не допускается (портрет).
+6. Действие с инструментом → карточка разрешения, кнопки работают; «To PC» кладёт текст в буфер Windows; вложение фото из галереи и с камеры.
+7. Экраны «Activity» и «Computers» открываются листом снизу; «Add a computer» показывает код; свайп вниз закрывает лист.
+8. Настройки → «Invite a person» → системная шара iOS; «Link @бот» → открывается Telegram.
+9. Через 7 дней (бесплатный Apple ID) приложение перестаёт запускаться — повторить п. 2; с Apple Developer Program — `eas build --profile preview --platform ios` или TestFlight.
+10. Если сборка падает — прислать хвост вывода `expo run:ios` (обычно CocoaPods/подпись), починю.
 
 **От тебя:** Xcode на Mac, при желании — Apple Developer аккаунт.
 
@@ -260,3 +294,5 @@
 - 2026-10-22 — этап 2: код и тесты готовы (протокол, brain, CLI, client-core, телефон). Ждёт приёмки. Следующий — этап 3 (Telegram-бот: буфер).
 - 2026-10-22 — этап 3: код и тесты готовы (бот внутри демона, привязка с телефона, меню буфера). Ждёт приёмки. Следующий — этап 4 (чат с Claude из Telegram).
 - 2026-10-22 — этап 4: код и тесты готовы (чат с Claude из Telegram: стриминг, разрешения, фото). Ждёт приёмки. Следующий — этап 5 (Mini App).
+- 2026-10-22 — этап 5: код и тесты готовы (web-сборка, адаптеры Telegram, раздача с relay, кнопка меню и `/app`). Ждёт приёмки в Telegram. Следующий — этап 6 (iPhone).
+- 2026-10-22 — этап 6: iOS-таргет и инструкция сборки готовы, `expo prebuild --platform ios` проходит. Ждёт сборки на Mac и прогона на iPhone. Все этапы плана в коде; дальше — приёмка и правки по ней.

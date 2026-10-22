@@ -1,13 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../src/haptics';
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
-import { Alert, Linking, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
+import { alert } from '../src/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { IconName } from '../src/format';
 import { useLock } from '../src/lock';
 import { useChatState, useSession } from '../src/session';
+import { openTelegramLink, shareViaTelegram } from '../src/telegram';
 import { colors, mono } from '../src/theme';
 
 function Section({ title }: { title: string }) {
@@ -66,9 +68,10 @@ export default function SettingsScreen() {
     const invitation = state.invitation;
     if (!invitation || !client) return;
     client.clearInvitation();
-    void Share.share({
-      message: `Join my Pocket: open the app, choose "Paste link" and paste this (valid 5 minutes)\n${invitation.uri}`,
-    }).catch(() => {});
+    const text = 'Join my Pocket: open the app, choose "Paste link" and paste this (valid 5 minutes)';
+    if (shareViaTelegram(invitation.uri, text)) return;
+    const message = `${text}\n${invitation.uri}`;
+    void Share.share({ message }).catch(() => alert('Invite link', message));
   }, [state.invitation, client]);
 
   const telegramBot = state.host?.telegramBot;
@@ -82,11 +85,12 @@ export default function SettingsScreen() {
     if (!link || !client) return;
     client.clearTelegramLink();
     // Opens the bot in Telegram with the code as its start parameter; the bot joins as another device of this person.
-    void Linking.openURL(link.url).catch(() => Alert.alert('Telegram', `Open this link within 5 minutes:\n${link.url}`));
+    if (openTelegramLink(link.url)) return;
+    void Linking.openURL(link.url).catch(() => alert('Telegram', `Open this link within 5 minutes:\n${link.url}`));
   }, [state.telegramLink, client]);
 
   const stopEverything = () =>
-    Alert.alert(owner ? 'Stop everything?' : 'Stop your chats?', owner ? 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.' : 'Kills your Claude chats and the commands running on your computers.', [
+    alert(owner ? 'Stop everything?' : 'Stop your chats?', owner ? 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.' : 'Kills your Claude chats and the commands running on your computers.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: owner ? 'Stop everything' : 'Stop my chats',
@@ -99,7 +103,7 @@ export default function SettingsScreen() {
     ]);
 
   const confirmUnpair = () =>
-    Alert.alert('Unpair this phone?', 'The keys on this phone are erased. You will need to pair again with a new code.', [
+    alert('Unpair this phone?', 'The keys on this phone are erased. You will need to pair again with a new code.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Unpair', style: 'destructive', onPress: () => void unpair() },
     ]);

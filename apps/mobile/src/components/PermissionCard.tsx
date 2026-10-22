@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import * as Haptics from '../haptics';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { PermissionDecision } from '@pocket/protocol';
 import type { PermissionRequest } from '@pocket/client-core';

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as LocalAuthentication from 'expo-local-authentication';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
+import { authenticateBiometric, biometricsAvailable } from './biometrics';
 import { loadBiometricEnabled, saveBiometricEnabled } from './storage';
 import { colors, space } from './theme';
 
@@ -14,10 +14,6 @@ interface LockContextValue {
 }
 
 const LockContext = createContext<LockContextValue | null>(null);
-
-async function detectAvailable(): Promise<boolean> {
-  return (await LocalAuthentication.hasHardwareAsync()) && (await LocalAuthentication.isEnrolledAsync());
-}
 
 export function LockProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -35,8 +31,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
     if (authenticating.current) return false;
     authenticating.current = true;
     try {
-      const res = await LocalAuthentication.authenticateAsync({ promptMessage: 'Unlock Pocket' });
-      return res.success;
+      return await authenticateBiometric('Unlock Pocket');
     } finally {
       authenticating.current = false;
     }
@@ -48,7 +43,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      const [on, hw] = await Promise.all([loadBiometricEnabled(), detectAvailable().catch(() => false)]);
+      const [on, hw] = await Promise.all([loadBiometricEnabled(), biometricsAvailable().catch(() => false)]);
       setEnabledState(on);
       setAvailable(hw);
       setReady(true);

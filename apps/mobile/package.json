@@ -7,7 +7,8 @@
     "start": "expo start",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit -p .",
-    "export": "expo export --platform android"
+    "export": "expo export --platform android",
+    "export:web": "expo export --platform web"
   },
   "dependencies": {
     "@expo-google-fonts/grand-hotel": "^0.4.1",
