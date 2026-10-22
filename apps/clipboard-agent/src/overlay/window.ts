@@ -1,8 +1,13 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { WindowOp } from './model.js';
+import type { OverlayTheme, WindowOp } from './model.js';
 
-export type WindowEvent = { ev: 'ready' } | { ev: 'visible'; visible: boolean } | { ev: 'copied'; what: string } | { ev: 'error'; message: string };
+export type WindowEvent =
+  | { ev: 'ready' }
+  | { ev: 'visible'; visible: boolean }
+  | { ev: 'copied'; what: string }
+  | { ev: 'theme'; theme: OverlayTheme }
+  | { ev: 'error'; message: string };
 
 export interface OverlayWindowOptions {
   /** PowerShell script to run; the caller writes it to disk. */

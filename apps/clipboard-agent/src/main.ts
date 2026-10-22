@@ -114,8 +114,18 @@ async function run(): Promise<void> {
   const startOverlay = () => {
     if (overlay || !win) return;
     writeFileSync(files.overlay, OVERLAY_PS);
-    const model = new OverlayModel({ window: (op) => void overlay?.window.send(op), request: (body) => agent?.request(body) });
-    const window = new OverlayWindow({ script: files.overlay, snapshot: () => model.snapshot(), log });
+    const model = new OverlayModel({ window: (op) => void overlay?.window.send(op), request: (body) => agent?.request(body) }, state.overlayTheme);
+    const window = new OverlayWindow({
+      script: files.overlay,
+      snapshot: () => model.snapshot(),
+      log,
+      onEvent: (e) => {
+        if (e.ev !== 'theme' || e.theme === state.overlayTheme) return;
+        state.overlayTheme = e.theme;
+        saveState(state);
+        model.setTheme(e.theme);
+      },
+    });
     overlay = { model, window };
     window.start();
     agent?.setOverlay(model);

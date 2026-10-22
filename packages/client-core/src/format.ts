@@ -47,6 +47,183 @@ export function parseMarkdown(text: string): Block[] {
   return blocks;
 }
 
+/** A run of text with its styles; `link` carries the target of `[text](url)`. */
+export type RichInline = { text: string; code?: boolean; bold?: boolean; italic?: boolean; link?: string };
+export type RichBlock =
+  | { type: 'paragraph'; inline: RichInline[] }
+  | { type: 'heading'; level: 1 | 2 | 3; inline: RichInline[] }
+  | { type: 'list'; ordered: boolean; items: RichInline[][] }
+  | { type: 'quote'; inline: RichInline[] }
+  | { type: 'rule' }
+  | { type: 'code'; lang: string; text: string };
+
+const LINK = /^\[([^\]\n]+)\]\(([^)\s]+)\)/;
+const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+const LIST_ITEM = /^ {0,3}(?:([-*+•])|(\d{1,3})[.)])\s+(.*)$/;
+const QUOTE = /^ {0,3}>\s?(.*)$/;
+const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
+
+function closing(text: string, from: number, marker: string): number {
+  // A closer needs content before it and must not be preceded by whitespace; markers inside `code` do not count.
+  // An unterminated marker is literal (streaming).
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === '`') {
+      const end = text.indexOf('`', i + 1);
+      if (end > i) {
+        i = end;
+        continue;
+      }
+    }
+    if (text.startsWith(marker, i) && i > from && !/\s/.test(text[i - 1] ?? '')) return i;
+  }
+  return -1;
+}
+
+/** Inline markdown: `code`, **bold**, *italic*, [links](url). Unterminated markers stay literal so streaming text never flickers. */
+export function parseRichInline(text: string, style: { bold?: boolean; italic?: boolean } = {}): RichInline[] {
+  const out: RichInline[] = [];
+  let literal = '';
+  const flush = () => {
+    if (literal) out.push({ text: literal, ...style });
+    literal = '';
+  };
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] ?? '';
+    if (ch === '`') {
+      const end = text.indexOf('`', i + 1);
+      const nl = text.indexOf('\n', i + 1);
+      if (end > i + 1 && (nl < 0 || end < nl)) {
+        flush();
+        out.push({ text: text.slice(i + 1, end), code: true, ...style });
+        i = end + 1;
+        continue;
+      }
+    } else if ((ch === '*' || ch === '_') && !style.bold && text.startsWith(ch + ch, i) && !/\s/.test(text[i + 2] ?? ' ')) {
+      const end = closing(text, i + 2, ch + ch);
+      if (end > 0) {
+        flush();
+        out.push(...parseRichInline(text.slice(i + 2, end), { ...style, bold: true }));
+        i = end + 2;
+        continue;
+      }
+    } else if ((ch === '*' || ch === '_') && !style.italic && !/\s/.test(text[i + 1] ?? ' ') && (ch === '*' || !/\w/.test(text[i - 1] ?? ' '))) {
+      const end = closing(text, i + 1, ch);
+      if (end > 0 && text[end + 1] !== ch) {
+        flush();
+        out.push(...parseRichInline(text.slice(i + 1, end), { ...style, italic: true }));
+        i = end + 1;
+        continue;
+      }
+    } else if (ch === '[') {
+      const m = LINK.exec(text.slice(i));
+      if (m) {
+        flush();
+        out.push({ text: m[1] ?? '', link: m[2] ?? '', ...style });
+        i += m[0].length;
+        continue;
+      }
+    }
+    literal += ch;
+    i++;
+  }
+  flush();
+  return out;
+}
+
+/** Markdown the way Claude writes it: headings, lists, quotes, rules, fenced code and styled text. Streaming-tolerant. */
+export function parseRichMarkdown(text: string): RichBlock[] {
+  const blocks: RichBlock[] = [];
+  let para: string[] = [];
+  let quote: string[] = [];
+  let list: { ordered: boolean; items: string[] } | undefined;
+  let code: { lang: string; lines: string[] } | undefined;
+
+  const flush = () => {
+    if (para.length) blocks.push({ type: 'paragraph', inline: parseRichInline(para.join('\n')) });
+    if (quote.length) blocks.push({ type: 'quote', inline: parseRichInline(quote.join('\n')) });
+    if (list) blocks.push({ type: 'list', ordered: list.ordered, items: list.items.map((item) => parseRichInline(item)) });
+    para = [];
+    quote = [];
+    list = undefined;
+  };
+
+  for (const line of text.split('\n')) {
+    if (code) {
+      if (FENCE.test(line) && FENCE.exec(line)?.[1] === '') {
+        blocks.push({ type: 'code', lang: code.lang, text: code.lines.join('\n') });
+        code = undefined;
+      } else code.lines.push(line);
+      continue;
+    }
+    const fence = FENCE.exec(line);
+    if (fence) {
+      flush();
+      code = { lang: fence[1] ?? '', lines: [] };
+      continue;
+    }
+    if (line.trim() === '') {
+      flush();
+      continue;
+    }
+    const item = LIST_ITEM.exec(line);
+    if (item) {
+      const ordered = item[2] !== undefined;
+      if (!list || list.ordered !== ordered) {
+        flush();
+        list = { ordered, items: [] };
+      }
+      list.items.push(item[3] ?? '');
+      continue;
+    }
+    if (list && /^\s{2,}\S/.test(line)) {
+      // Indented continuation of the previous item.
+      list.items[list.items.length - 1] += `\n${line.trim()}`;
+      continue;
+    }
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flush();
+      const level = Math.min(3, heading[1]?.length ?? 1) as 1 | 2 | 3;
+      blocks.push({ type: 'heading', level, inline: parseRichInline(heading[2] ?? '') });
+      continue;
+    }
+    if (RULE.test(line)) {
+      flush();
+      blocks.push({ type: 'rule' });
+      continue;
+    }
+    const q = QUOTE.exec(line);
+    if (q) {
+      if (para.length || list) flush();
+      quote.push(q[1] ?? '');
+      continue;
+    }
+    if (quote.length || list) flush();
+    para.push(line);
+  }
+  flush();
+  if (code) blocks.push({ type: 'code', lang: code.lang, text: code.lines.join('\n') });
+  return blocks;
+}
+
+/** The text of a block without any markup, for copying and for plain-text fallbacks. */
+export function richBlockText(block: RichBlock): string {
+  const runs = (inline: RichInline[]) => inline.map((r) => r.text).join('');
+  switch (block.type) {
+    case 'paragraph':
+    case 'heading':
+    case 'quote':
+      return runs(block.inline);
+    case 'list':
+      return block.items.map((item, i) => `${block.ordered ? `${i + 1}.` : '•'} ${runs(item)}`).join('\n');
+    case 'rule':
+      return '———';
+    case 'code':
+      return block.text;
+  }
+}
+
 const SUMMARY_KEYS = ['command', 'file_path', 'pattern', 'path', 'glob', 'query', 'url', 'description'] as const;
 
 export function truncate(text: string, max: number): string {

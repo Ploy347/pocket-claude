@@ -1,7 +1,8 @@
-import { applyEvent, buildThread, parseMarkdown, shortToolName, summarizeTool, type Block, type ChatItem } from '@pocket/client-core';
+import { applyEvent, buildThread, parseRichMarkdown, shortToolName, summarizeTool, type ChatItem, type RichBlock } from '@pocket/client-core';
 import type { InnerMessageBody, SessionMeta } from '@pocket/protocol';
 
 export type OverlayRole = 'user' | 'assistant' | 'tool' | 'error';
+export type OverlayTheme = 'dark' | 'light';
 
 /** One entry of the transcript the way the window draws it. */
 export interface OverlayMessage {
@@ -9,17 +10,18 @@ export interface OverlayMessage {
   role: OverlayRole;
   /** Raw text: what "copy reply" puts on the clipboard. */
   text: string;
-  blocks: Block[];
+  blocks: RichBlock[];
   streaming: boolean;
   /** Short note under the text, e.g. attachments or "failed". */
   note?: string;
 }
 
 export type WindowOp =
-  | { op: 'reset'; title: string; messages: OverlayMessage[] }
+  | { op: 'reset'; title: string; messages: OverlayMessage[]; theme: OverlayTheme }
   | { op: 'upsert'; message: OverlayMessage }
   | { op: 'title'; title: string }
   | { op: 'status'; text: string }
+  | { op: 'theme'; theme: OverlayTheme }
   | { op: 'quit' };
 
 export interface OverlayModelDeps {
@@ -37,8 +39,18 @@ export class OverlayModel {
   private readonly loaded = new Set<string>();
   private readonly requested = new Set<string>();
   private activeId: string | null = null;
+  private theme: OverlayTheme = 'dark';
 
-  constructor(private readonly deps: OverlayModelDeps) {}
+  constructor(private readonly deps: OverlayModelDeps, theme?: OverlayTheme) {
+    if (theme) this.theme = theme;
+  }
+
+  /** The window reports a toggle; the agent persists it and the next snapshot carries it. */
+  setTheme(theme: OverlayTheme): void {
+    if (theme === this.theme) return;
+    this.theme = theme;
+    this.deps.window({ op: 'theme', theme });
+  }
 
   /** The Mac is reachable (again): start over from its list of chats. */
   connected(): void {
@@ -56,7 +68,7 @@ export class OverlayModel {
   snapshot(): WindowOp {
     const active = this.activeId ? this.sessions.get(this.activeId) : undefined;
     const thread = this.activeId ? this.threads.get(this.activeId) : undefined;
-    return { op: 'reset', title: active?.title ?? NO_CHAT, messages: thread?.map(toMessage).filter(present) ?? [] };
+    return { op: 'reset', title: active?.title ?? NO_CHAT, messages: thread?.map(toMessage).filter(present) ?? [], theme: this.theme };
   }
 
   handle(message: InnerMessageBody): void {
@@ -157,10 +169,10 @@ export function toMessage(item: ChatItem): OverlayMessage | null {
   switch (item.type) {
     case 'user': {
       const notes = [...(item.images ? [`${item.images} image${item.images > 1 ? 's' : ''}`] : []), ...(item.files ?? [])];
-      return { id: item.key, role: 'user', text: item.text, blocks: parseMarkdown(item.text), streaming: false, ...(notes.length ? { note: notes.join(', ') } : {}) };
+      return { id: item.key, role: 'user', text: item.text, blocks: parseRichMarkdown(item.text), streaming: false, ...(notes.length ? { note: notes.join(', ') } : {}) };
     }
     case 'assistant':
-      return { id: item.key, role: 'assistant', text: item.text, blocks: parseMarkdown(item.text), streaming: item.streaming };
+      return { id: item.key, role: 'assistant', text: item.text, blocks: parseRichMarkdown(item.text), streaming: item.streaming };
     case 'tool': {
       const text = `${shortToolName(item.name)} ${summarizeTool(item.input)}`.trim();
       return { id: item.key, role: 'tool', text, blocks: [], streaming: !item.result, ...(item.result?.isError ? { note: 'failed' } : {}) };

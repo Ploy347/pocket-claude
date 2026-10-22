@@ -13,6 +13,8 @@ export interface AgentState {
   replay: Record<string, number>;
   /** Show AI replies in the overlay window; unset means on (Windows only). */
   overlay?: boolean;
+  /** Overlay colours; unset means dark. */
+  overlayTheme?: 'dark' | 'light';
 }
 
 /** What the overlay window needs from the agent: the brain's session traffic and its presence. */
