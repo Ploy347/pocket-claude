@@ -120,8 +120,10 @@ describe('people', () => {
     expect(mashaCreated.payload.session.userId).toBe(mashaId);
     expect(owner.inbox.filter((m) => m.type === 'session.created').map((m) => m.type === 'session.created' && m.payload.session.title)).toEqual(['Owner chat']);
 
-    // Without a computer of her own, Masha cannot run anything: chats never fall back to the Mac.
-    expect((await masha.ask({ type: 'message.send', payload: { sessionId: mashaCreated.payload.session.sessionId, text: 'hi' } }, 'error')).payload.code).toBe('no_computer');
+    // Without a tools computer of her own, Masha's chats run in chat-only mode: never with the Mac's files.
+    const mashaSession = mashaCreated.payload.session.sessionId;
+    expect(brain.sessionMode(ownerSession)).toEqual({ mode: 'mac' });
+    expect(brain.sessionMode(mashaSession)).toEqual({ mode: 'chat' });
     expect((await masha.ask({ type: 'computer.select', payload: { deviceId: MAC_DEVICE_ID } }, 'error')).payload.code).toBe('not_owner');
     expect((await masha.ask({ type: 'user.invite', payload: {} }, 'error')).payload.code).toBe('not_owner');
 
@@ -131,10 +133,27 @@ describe('people', () => {
     pc.send({ type: 'executor.status', payload: { workspaces: ['C:\\\\work'], os: 'win32', shell: 'pwsh', capabilities: ['tools'] } });
     const mashaComputers = await masha.next('computers.result', masha.inbox.length);
     expect(mashaComputers.payload.computers.map((c) => c.name)).toEqual(['masha-pc']);
+    expect(brain.sessionMode(mashaSession)).toEqual({ mode: 'remote', executorId: pc.deviceId });
+    // A PocketClipboard-only laptop keeps the chat in chat-only mode but gives the pc_* tools a target.
+    const clipPairing = await masha.ask({ type: 'computer.pair', payload: {} }, 'computer.pairing');
+    const laptop = await connect(parsePairingCode(clipPairing.payload.code), 'executor', 'masha-laptop');
+    laptop.send({ type: 'executor.status', payload: { workspaces: [], os: 'win32', shell: 'none', capabilities: ['clipboard', 'screenshot'] } });
+    await masha.next('computers.result', masha.inbox.length);
+    expect(brain.sessionMode(mashaSession)).toEqual({ mode: 'remote', executorId: pc.deviceId, pcId: laptop.deviceId });
+    await masha.ask({ type: 'computer.select', payload: { deviceId: laptop.deviceId, sessionId: mashaSession } }, 'computers.result');
+    expect(brain.sessionMode(mashaSession)).toEqual({ mode: 'remote', executorId: pc.deviceId, pcId: laptop.deviceId });
+
+    // Screenshots and the clipboard go to that laptop and come back to the phone that asked.
+    const shot = masha.ask({ type: 'screen.get', payload: { requestId: 's1', deviceId: laptop.deviceId } }, 'screen.result');
+    const capture = await laptop.next('screen.capture');
+    expect(capture.payload.requestId).toBe('s1');
+    laptop.send({ type: 'screen.image', payload: { requestId: 's1', image: { mime: 'image/jpeg', dataBase64: 'AAAA', width: 16, height: 9 } } });
+    expect((await shot).payload).toEqual({ requestId: 's1', deviceId: laptop.deviceId, image: { mime: 'image/jpeg', dataBase64: 'AAAA', width: 16, height: 9 } });
+    expect((await owner.ask({ type: 'screen.get', payload: { requestId: 's2', deviceId: laptop.deviceId } }, 'screen.result')).payload.error).toMatch(/not paired/);
     expect((await owner.ask({ type: 'computers.get', payload: {} }, 'computers.result')).payload.computers).toEqual([]);
     expect((await owner.ask({ type: 'computer.select', payload: { deviceId: pc.deviceId } }, 'error')).payload.code).toBe('unknown_computer');
     expect((await owner.ask({ type: 'clipboard.get', payload: { requestId: 'r1', deviceId: pc.deviceId } }, 'clipboard.result')).payload.error).toMatch(/not paired/);
-    expect(brain.users().find((u) => u.id === mashaId)?.devices.map((d) => d.name)).toEqual(['masha-phone', 'masha-pc']);
+    expect(brain.users().find((u) => u.id === mashaId)?.devices.map((d) => d.name)).toEqual(['masha-phone', 'masha-pc', 'masha-laptop']);
 
     // The owner's invite link from the phone registers people too.
     const invitation = await owner.ask({ type: 'user.invite', payload: {} }, 'user.invitation');

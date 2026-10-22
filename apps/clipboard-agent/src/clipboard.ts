@@ -109,7 +109,7 @@ $img = [Drawing.Image]::FromFile($env:POCKET_CLIP_FILE)
 $img.Dispose()
 `;
 
-function powershell(script: string, opts: { stdin?: string; env?: Record<string, string> } = {}): Promise<string> {
+export function powershell(script: string, opts: { stdin?: string; env?: Record<string, string> } = {}): Promise<string> {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
     const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {

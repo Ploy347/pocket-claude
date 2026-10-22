@@ -8,7 +8,7 @@ Everything between devices is end-to-end encrypted; the relay only sees cipherte
 
 | Path | What it is |
 |---|---|
-| `apps/brain` | Mac daemon: runs Claude Code (Agent SDK), owns sessions, permissions and paired devices. CLI `pocket-claude pair \| relay \| status`. |
+| `apps/brain` | Mac daemon: runs Claude Code (Agent SDK), owns sessions, permissions and paired devices. CLI `pocket-claude pair \| relay \| status`. Chats of invited people run in chat-only mode (no files), with `pc_*` tools for their own PocketClipboard computer: clipboard read/write and screenshots. |
 | `apps/relay` | Relay: Cloudflare Worker (`worker.ts`) or Node server (`node-server.ts`) on the same core. Routing, offline queues, pairing. The Node server also serves the Mini App. |
 | `apps/mobile` | Expo / React Native app (Android, iPhone) and, as a web build, the Telegram Mini App. The chat is in Direct. |
 | `apps/executor-extension` | VS Code extension: executes tool calls in the open workspace, has a chat panel. |

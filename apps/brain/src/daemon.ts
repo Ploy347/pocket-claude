@@ -15,6 +15,7 @@ import {
   pairingUri,
   safetyNumber,
   sealPairReply,
+  type ClipboardItem,
   type Identity,
   TOOL_NAMES,
   type InnerMessageBody,
@@ -27,6 +28,7 @@ import {
   type PayloadOf,
   type PushHint,
   type RelayToDevice,
+  type ScreenImage,
   type SessionEvent,
   type SessionMeta,
 } from '@pocket/protocol';
@@ -36,6 +38,7 @@ import { isAllowedByRules, validateRule } from './allowlist.js';
 import { toDisplayCall } from './claude-tools.js';
 import { ExecutorBridge } from './executor.js';
 import { log } from './log.js';
+import type { PcHandle } from './pc-tools.js';
 import { PermissionBroker } from './permissions.js';
 import { Session } from './session.js';
 import { migrateState, OWNER_ID, saveState, type BrainState, type PairedDevice, type UsageTotals, type User } from './store.js';
@@ -50,6 +53,10 @@ const FALLBACK_MODELS: ModelInfo[] = [
 ];
 const DELTA_FLUSH_MS = 60;
 const CLIPBOARD_TIMEOUT_MS = 60_000;
+
+type PcRequest = Extract<InnerMessageBody, { type: 'clipboard.read' | 'clipboard.write' | 'screen.capture' }>;
+type PcReply = Extract<InnerMessageBody, { type: 'clipboard.data' | 'clipboard.done' | 'screen.image' }>;
+type PcAnswer = { items?: ClipboardItem[]; image?: ScreenImage; error?: string };
 /** The only client traffic a computer with the 'overlay' capability gets to see: the chat itself, nothing it could act on. */
 const OVERLAY_MIRRORED = new Set<MessageType>(['session.event', 'session.created', 'session.updated', 'session.deleted']);
 
@@ -98,8 +105,8 @@ export class Brain {
   private readonly pairings = new Map<string, OpenPairing>();
   private readonly pendingDeltas = new Map<string, { text: string; timer: ReturnType<typeof setTimeout> }>();
   private claudeVersion: string | null = null;
-  /** Clipboard requests waiting for a computer: requestId → the client that asked. */
-  private readonly clipboardRequests = new Map<string, { client: string; deviceId: string; kind: 'get' | 'set'; timer: ReturnType<typeof setTimeout> }>();
+  /** Clipboard and screen requests waiting for a computer's answer. */
+  private readonly pcRequests = new Map<string, { deviceId: string; timer: ReturnType<typeof setTimeout>; resolve: (r: PcReply) => void }>();
   private models: ModelInfo[] | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -337,9 +344,74 @@ export class Brain {
     return !!this.executor.info(deviceId)?.capabilities?.includes('overlay');
   }
 
+  /** Chats of people other than the owner that have no tools computer run on the Mac without any file access. */
+  private chatOnly(sessionId: string): boolean {
+    const s = this.sessions.get(sessionId);
+    if (!s) return false;
+    return !this.isOwner(s.meta.userId ?? OWNER_ID) && this.executorForSession(sessionId) === undefined;
+  }
+
+  /** The PocketClipboard computer a chat's pc_* tools talk to: the chat's computer if it has one, else the person's default. */
+  private pcForSession(sessionId: string): string | undefined {
+    const s = this.sessions.get(sessionId);
+    if (!s) return undefined;
+    const userId = s.meta.userId ?? OWNER_ID;
+    const hasClipboard = (id: string | undefined) => !!id && this.executorDevices(userId).some((d) => d.deviceId === id) && !!this.executor.info(id)?.capabilities?.includes('clipboard');
+    if (hasClipboard(s.meta.executorId)) return s.meta.executorId;
+    const fallback = this.defaultExecutor(userId);
+    return hasClipboard(fallback) ? fallback : undefined;
+  }
+
+  /** Where a chat runs: the Mac, a tools computer, or chat-only on the Mac without files (people with just PocketClipboard). */
+  sessionMode(sessionId: string): { mode: 'mac' | 'remote' | 'chat'; executorId?: string; pcId?: string } | undefined {
+    if (!this.sessions.has(sessionId)) return undefined;
+    const executorId = this.executorForSession(sessionId);
+    const pcId = this.pcForSession(sessionId);
+    return { mode: executorId ? 'remote' : this.chatOnly(sessionId) ? 'chat' : 'mac', ...(executorId ? { executorId } : {}), ...(pcId ? { pcId } : {}) };
+  }
+
+  /** Sends a clipboard or screen request to a computer and waits for its answer. */
+  private askPc(deviceId: string, body: PcRequest, timeoutMs = CLIPBOARD_TIMEOUT_MS): Promise<PcAnswer> {
+    return new Promise((resolve) => {
+      const { requestId } = body.payload;
+      if (!this.link.isOnline(deviceId) || !this.link.send(deviceId, body)) return resolve({ error: 'The computer is offline' });
+      const timer = setTimeout(() => {
+        if (this.pcRequests.delete(requestId)) resolve({ error: 'The computer did not answer' });
+      }, timeoutMs);
+      this.pcRequests.set(requestId, { deviceId, timer, resolve: (r) => resolve(r.payload) });
+    });
+  }
+
+  private pcHandle(sessionId: string): PcHandle {
+    const id = () => this.pcForSession(sessionId);
+    const ask = (body: PcRequest) => {
+      const deviceId = id();
+      return deviceId ? this.askPc(deviceId, body) : Promise.resolve({ error: 'No computer' });
+    };
+    const self = this;
+    return {
+      get id() {
+        return id();
+      },
+      get name() {
+        const deviceId = id();
+        return deviceId ? self.state.devices.find((d) => d.deviceId === deviceId)?.name : undefined;
+      },
+      get online() {
+        return self.link.isOnline(id() ?? '');
+      },
+      get capabilities() {
+        return self.executor.info(id())?.capabilities ?? [];
+      },
+      clipboardRead: () => ask({ type: 'clipboard.read', payload: { requestId: randomUUID() } }),
+      clipboardWrite: (item) => ask({ type: 'clipboard.write', payload: { requestId: randomUUID(), item } }),
+      screenshot: () => ask({ type: 'screen.capture', payload: { requestId: randomUUID() } }),
+    };
+  }
+
   /**
    * The computer a chat works on, or undefined for the Mac itself. Only the owner's chats work on the Mac:
-   * other people's chats fall back to their default computer, and run nowhere until they add one.
+   * other people's chats fall back to their default computer; without one they run on the Mac in chat-only mode.
    */
   private executorForSession(sessionId: string): string | undefined {
     const s = this.sessions.get(sessionId);
@@ -502,19 +574,13 @@ export class Brain {
         case 'tool.output':
           return this.executor.handleOutput(from, message.payload);
         case 'clipboard.data':
-        case 'clipboard.done': {
-          const req = this.clipboardRequests.get(message.payload.requestId);
+        case 'clipboard.done':
+        case 'screen.image': {
+          const req = this.pcRequests.get(message.payload.requestId);
           if (!req || req.deviceId !== from) return;
           clearTimeout(req.timer);
-          this.clipboardRequests.delete(message.payload.requestId);
-          if (message.type === 'clipboard.data') {
-            this.link.send(req.client, {
-              type: 'clipboard.result',
-              payload: { requestId: message.payload.requestId, deviceId: from, ...(message.payload.items ? { items: message.payload.items } : {}), ...(message.payload.error ? { error: message.payload.error } : {}) },
-            });
-          } else {
-            this.link.send(req.client, { type: 'clipboard.written', payload: { requestId: message.payload.requestId, deviceId: from, ...(message.payload.error ? { error: message.payload.error } : {}) } });
-          }
+          this.pcRequests.delete(message.payload.requestId);
+          req.resolve(message);
           return;
         }
         case 'executor.status':
@@ -573,7 +639,6 @@ export class Brain {
       case 'message.send': {
         const s = mySession(message.payload.sessionId);
         if (!s) return this.sendError(from, 'unknown_session', 'Session not found');
-        if (!owner && !this.executorForSession(s.id)) return this.sendError(from, 'no_computer', 'Add a computer first (phone icon → Add a computer): your chats work on your own computer.');
         this.enforceLiveLimit(s.id);
         try {
           await s.send({ text: message.payload.text, attachments: message.payload.attachments, from });
@@ -649,21 +714,27 @@ export class Brain {
         return;
       }
       case 'clipboard.get':
-      case 'clipboard.set': {
+      case 'clipboard.set':
+      case 'screen.get': {
         const { requestId, deviceId } = message.payload;
-        const fail = (error: string) =>
-          message.type === 'clipboard.get'
-            ? this.link.send(from, { type: 'clipboard.result', payload: { requestId, deviceId, error } })
-            : this.link.send(from, { type: 'clipboard.written', payload: { requestId, deviceId, error } });
-        if (!myComputer(deviceId)) return void fail('That computer is not paired');
-        const body: InnerMessageBody =
-          message.type === 'clipboard.get' ? { type: 'clipboard.read', payload: { requestId } } : { type: 'clipboard.write', payload: { requestId, item: message.payload.item } };
-        if (!this.link.isOnline(deviceId) || !this.link.send(deviceId, body)) return void fail('The computer is offline');
+        if (!myComputer(deviceId)) {
+          const error = 'That computer is not paired';
+          if (message.type === 'clipboard.get') this.link.send(from, { type: 'clipboard.result', payload: { requestId, deviceId, error } });
+          else if (message.type === 'clipboard.set') this.link.send(from, { type: 'clipboard.written', payload: { requestId, deviceId, error } });
+          else this.link.send(from, { type: 'screen.result', payload: { requestId, deviceId, error } });
+          return;
+        }
         this.setActiveExecutor(userId, deviceId);
-        const timer = setTimeout(() => {
-          if (this.clipboardRequests.delete(requestId)) fail('The computer did not answer');
-        }, CLIPBOARD_TIMEOUT_MS);
-        this.clipboardRequests.set(requestId, { client: from, deviceId, kind: message.type === 'clipboard.get' ? 'get' : 'set', timer });
+        if (message.type === 'clipboard.get') {
+          const r = await this.askPc(deviceId, { type: 'clipboard.read', payload: { requestId } });
+          this.link.send(from, { type: 'clipboard.result', payload: { requestId, deviceId, ...(r.items ? { items: r.items } : {}), ...(r.error ? { error: r.error } : {}) } });
+        } else if (message.type === 'clipboard.set') {
+          const r = await this.askPc(deviceId, { type: 'clipboard.write', payload: { requestId, item: message.payload.item } });
+          this.link.send(from, { type: 'clipboard.written', payload: { requestId, deviceId, ...(r.error ? { error: r.error } : {}) } });
+        } else {
+          const r = await this.askPc(deviceId, { type: 'screen.capture', payload: { requestId } });
+          this.link.send(from, { type: 'screen.result', payload: { requestId, deviceId, ...(r.image ? { image: r.image } : {}), ...(r.error ? { error: r.error } : {}) } });
+        }
         return;
       }
       case 'computer.pair': {
@@ -779,6 +850,9 @@ export class Brain {
             return s?.meta.project && s.meta.executorId === this.executorForSession(sessionId) ? s.meta.project : undefined;
           },
         ),
+      pcFor: (sessionId: string) => this.pcHandle(sessionId),
+      chatOnly: (sessionId: string) => this.chatOnly(sessionId),
+      userName: (sessionId: string) => this.userName(this.userOfSession(sessionId)),
       emit: (sessionId: string, event: SessionEvent, durable: boolean) => this.emitEvent(sessionId, event, durable),
       metaChanged: (meta: SessionMeta) => {
         this.toClients(meta.userId ?? OWNER_ID, { type: 'session.updated', payload: { session: meta } }, undefined, true);

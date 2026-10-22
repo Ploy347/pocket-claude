@@ -12,6 +12,7 @@ import { macClipboard, windowsClipboard } from './clipboard.js';
 import { OverlayModel } from './overlay/model.js';
 import { OVERLAY_PS } from './overlay/script.js';
 import { OverlayWindow } from './overlay/window.js';
+import { windowsScreen } from './screenshot.js';
 
 const WS = WebSocket as unknown as WebSocketCtor;
 const DEFAULT_RELAY = 'https://macbook-pro-dmitrij.taild47d20.ts.net:10000';
@@ -161,6 +162,7 @@ async function run(): Promise<void> {
   server.listen(pipe, () => {
     agent = new ClipboardAgent(state, {
       clipboard: win ? windowsClipboard : macClipboard,
+      screen: win ? windowsScreen : undefined,
       WebSocket: WS,
       log,
       onRelayMoved: (url) => {

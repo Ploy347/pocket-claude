@@ -2,6 +2,7 @@ import * as os from 'node:os';
 import { deserializeIdentity, type InnerMessageBody, type SerializedIdentity } from '@pocket/protocol';
 import { DeviceLink, type IncomingMessage, type WebSocketCtor } from '@pocket/transport';
 import type { ClipboardBackend } from './clipboard.js';
+import type { ScreenBackend } from './screenshot.js';
 
 export interface AgentState {
   relayUrl: string;
@@ -33,6 +34,8 @@ export class ClipboardAgent {
     private readonly state: AgentState,
     private readonly opts: {
       clipboard: ClipboardBackend;
+      /** Screenshots on request; absent means the computer does not offer them. */
+      screen?: ScreenBackend;
       WebSocket?: WebSocketCtor;
       log: (m: string) => void;
       /** The relay moved; the caller persists the new address. */
@@ -89,7 +92,7 @@ export class ClipboardAgent {
   }
 
   private sendStatus(): void {
-    const capabilities = ['clipboard', ...(this.overlay ? ['overlay'] : [])];
+    const capabilities = ['clipboard', ...(this.opts.screen ? ['screenshot'] : []), ...(this.overlay ? ['overlay'] : [])];
     this.send({ type: 'executor.status', payload: { workspaces: [], os: `${os.platform()} ${os.release()}`, shell: 'none', capabilities } });
     this.overlay?.connected();
   }
@@ -119,8 +122,20 @@ export class ClipboardAgent {
         }
         return;
       }
+      case 'screen.capture': {
+        const { requestId } = message.payload;
+        if (!this.opts.screen) return this.send({ type: 'screen.image', payload: { requestId, error: 'This computer does not take screenshots.' } });
+        try {
+          const image = await this.opts.screen.capture();
+          this.opts.log(`screenshot sent: ${image.width}x${image.height}, ${Math.round(image.dataBase64.length / 1024)} KB`);
+          this.send({ type: 'screen.image', payload: { requestId, image } });
+        } catch (e) {
+          this.send({ type: 'screen.image', payload: { requestId, error: e instanceof Error ? e.message : String(e) } });
+        }
+        return;
+      }
       case 'tool.call':
-        this.send({ type: 'tool.result', payload: { callId: message.payload.callId, content: 'This computer only shares its clipboard.', isError: true } });
+        this.send({ type: 'tool.result', payload: { callId: message.payload.callId, content: 'This computer only shares its clipboard and screen.', isError: true } });
         return;
       case 'relay.moved':
         if (/^https?:\/\//.test(message.payload.url) && message.payload.url !== this.link.currentRelayUrl) {

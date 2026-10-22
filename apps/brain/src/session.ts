@@ -28,10 +28,16 @@ import {
 import { agentDefinitions, AUTO_ALLOWED_TOOLS, BUILTIN_TOOLS, CLAUDE_TOOLS, claudeTool, readLocalSkillFile, toDisplayCall, TOOL_ALIASES } from './claude-tools.js';
 import type { ExecutorHandle } from './executor.js';
 import { log } from './log.js';
+import { PC_ALLOWED_TOOLS, pcTools, pcToolsPrompt, type PcHandle } from './pc-tools.js';
 import { ensureSkillsPlugin, paths } from './store.js';
 
 export interface SessionHost {
   executorFor(sessionId: string): ExecutorHandle;
+  /** The person's PocketClipboard computer for the pc_* tools. */
+  pcFor(sessionId: string): PcHandle;
+  /** True for chats that run on the Mac without any file or shell access: people who are not the owner and have no tools computer. */
+  chatOnly(sessionId: string): boolean;
+  userName(sessionId: string): string;
   emit(sessionId: string, event: SessionEvent, durable: boolean): void;
   metaChanged(meta: SessionMeta): void;
   canUseTool: (sessionId: string, toolName: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<PermissionResult>;
@@ -58,21 +64,32 @@ function safeFileName(name: string | undefined, fallback: string): string {
   return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned.slice(0, 120) : fallback;
 }
 
-function macSystemPrompt(cwd: string, projectInstructions: string | null): string {
+function macSystemPrompt(cwd: string, projectInstructions: string | null, pcName: string | undefined): string {
   return [
     '# Workspace',
     `You work on the user\'s Mac in ${cwd}. Use your normal tools there.`,
     'The user chats from a phone. Keep replies short and lead with the outcome; they can copy any reply or code block to their Windows laptop clipboard with one tap, so put things meant for pasting into a single code block.',
     'Files the user attaches (often straight from their Windows clipboard) are saved on this Mac; their paths are listed in the message. Read them from there.',
+    pcToolsPrompt(pcName),
     projectInstructions ? `# Project instructions (CLAUDE.md)\n${projectInstructions}` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
 }
 
+function chatSystemPrompt(userName: string, pcName: string | undefined): string {
+  return [
+    '# Chat without a workspace',
+    `You are talking to ${userName} from their phone or Telegram. There is no project here and you have no file or shell access anywhere: never try to read, write or run anything. Your working directory is an empty scratch folder; ignore it.`,
+    'Answer questions, write code and commands in the chat. Anything meant for pasting goes in one code block, because the user copies a block with one tap. Keep replies short and lead with the outcome, in the user\'s language.',
+    pcToolsPrompt(pcName),
+  ].join('\n\n');
+}
+
 /** Built-ins that need a terminal UI or act outside the chat. */
 const MAC_DISALLOWED = ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'PushNotification', 'SendUserFile', 'Workflow'];
-const MAC_AUTO_ALLOWED = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', ...BUILTIN_TOOLS.filter((t) => t !== 'ExitPlanMode')];
+const MAC_AUTO_ALLOWED = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', ...BUILTIN_TOOLS.filter((t) => t !== 'ExitPlanMode'), ...PC_ALLOWED_TOOLS];
+const CHAT_BUILTIN_TOOLS = ['WebFetch', 'WebSearch'];
 
 const MCP_PREFIX = `mcp__${MCP_SERVER_NAME}__`;
 const IDLE_SHUTDOWN_MS = 30 * 60_000;
@@ -88,7 +105,7 @@ function remoteWorkspaceBlock(workspaces: string[]): string {
   ].join('\n');
 }
 
-function systemPromptFor(workspaces: string[], projectInstructions: string | null): string {
+function systemPromptFor(workspaces: string[], projectInstructions: string | null, pcName: string | undefined): string {
   const roots = workspaces.length ? workspaces.map((w) => `- ${w}`).join('\n') : '- (no folder open yet)';
   return [
     '# Remote Windows workspace',
@@ -99,6 +116,7 @@ function systemPromptFor(workspaces: string[], projectInstructions: string | nul
     'Tool paths may be relative; they resolve against the first workspace root. Prefer relative paths.',
     'Bash runs Windows PowerShell, not a POSIX shell: use PowerShell syntax and Windows paths. Use run_in_background for servers and watchers. Read a file before editing it.',
     'The user is chatting from a phone or a small VS Code panel: keep replies short and lead with the outcome.',
+    pcToolsPrompt(pcName),
     projectInstructions ? `# Project instructions (CLAUDE.md on the Windows workspace)\n${projectInstructions}` : '',
   ]
     .filter(Boolean)
@@ -297,7 +315,7 @@ export class Session {
    */
   private saveFiles(files: { mime: string; dataBase64: string; name?: string }[], blocks: Exclude<SDKUserMessage['message']['content'], string>): string[] {
     if (!files.length) return [];
-    const onMac = this.host.executorFor(this.id).id === undefined;
+    const onMac = this.host.executorFor(this.id).id === undefined && !this.host.chatOnly(this.id);
     const inbox = join(paths.home, 'inbox', this.id);
     if (onMac) mkdirSync(inbox, { recursive: true, mode: 0o700 });
     const notes: string[] = [];
@@ -396,14 +414,27 @@ export class Session {
 
     let cwd: string;
     let specific: Partial<Options>;
-    if (executor.id === undefined) {
+    const pcName = this.host.pcFor(this.id).name;
+    if (executor.id === undefined && this.host.chatOnly(this.id)) {
+      // No files anywhere: Claude talks, searches the web and reaches the person's own PocketClipboard computer.
+      cwd = join(paths.workDir, this.id);
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
+      specific = {
+        tools: CHAT_BUILTIN_TOOLS,
+        mcpServers: { [MCP_SERVER_NAME]: this.pcServer() },
+        strictMcpConfig: true,
+        allowedTools: [...CHAT_BUILTIN_TOOLS, ...PC_ALLOWED_TOOLS],
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: chatSystemPrompt(this.host.userName(this.id), pcName) },
+      };
+    } else if (executor.id === undefined) {
       cwd = this.macWorkspace();
       mkdirSync(cwd, { recursive: true });
       specific = {
         tools: { type: 'preset', preset: 'claude_code' },
         disallowedTools: MAC_DISALLOWED,
         allowedTools: MAC_AUTO_ALLOWED,
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: macSystemPrompt(cwd, readInstructions(cwd)) },
+        mcpServers: { [MCP_SERVER_NAME]: this.pcServer() },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: macSystemPrompt(cwd, readInstructions(cwd), pcName) },
       };
     } else {
       const roots = executor.root ? [executor.root] : (executor.info?.workspaces ?? []);
@@ -419,9 +450,9 @@ export class Session {
         toolAliases: TOOL_ALIASES,
         mcpServers: { [MCP_SERVER_NAME]: this.mcpServer() },
         strictMcpConfig: true,
-        allowedTools: AUTO_ALLOWED_TOOLS,
+        allowedTools: [...AUTO_ALLOWED_TOOLS, ...PC_ALLOWED_TOOLS],
         agents: agentDefinitions(remoteWorkspaceBlock(roots)),
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPromptFor(roots, projectInstructions) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPromptFor(roots, projectInstructions, pcName) },
       };
     }
 
@@ -457,6 +488,11 @@ export class Session {
     return DEFAULT_MAC_WORKSPACE;
   }
 
+  /** Only the pc_* tools: what Mac and chat-only sessions get. */
+  private pcServer() {
+    return createSdkMcpServer({ name: MCP_SERVER_NAME, version: '0.1.0', alwaysLoad: true, tools: pcTools(() => this.host.pcFor(this.id)) });
+  }
+
   private mcpServer() {
     const executor = this.host.executorFor(this.id);
     const skillDirs = skillDirectories();
@@ -465,7 +501,7 @@ export class Session {
       name: MCP_SERVER_NAME,
       version: '0.1.0',
       alwaysLoad: true,
-      tools: CLAUDE_TOOLS.map((t) =>
+      tools: [...pcTools(() => this.host.pcFor(this.id)), ...CLAUDE_TOOLS.map((t) =>
         tool(t.name, t.description, t.shape, async (args) => {
           const toolUseId = this.pendingToolUseIds.get(t.name)?.shift();
           const input = unscratchPaths(args as Record<string, unknown>, scratch);
@@ -485,7 +521,7 @@ export class Session {
           this.trackBackground(call, result.content, result.isError === true);
           return { content: [{ type: 'text' as const, text: result.content }], isError: result.isError ?? false };
         }),
-      ),
+      )],
     });
   }
 

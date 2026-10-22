@@ -73,6 +73,10 @@ export const clipboardItemSchema = z.discriminatedUnion('kind', [
 ]);
 export type ClipboardItem = z.infer<typeof clipboardItemSchema>;
 
+/** A downscaled picture of a computer's screen (all monitors), small enough for Claude to look at. */
+export const screenImageSchema = z.object({ mime: z.string(), dataBase64: z.string(), width: z.number().int().positive(), height: z.number().int().positive() });
+export type ScreenImage = z.infer<typeof screenImageSchema>;
+
 export const modelInfoSchema = z.object({
   value: z.string(),
   displayName: z.string(),
@@ -174,6 +178,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   /** Asks a computer for what is on its clipboard right now. */
   m('clipboard.get', z.object({ requestId: z.string(), deviceId: z.string() })),
   m('clipboard.set', z.object({ requestId: z.string(), deviceId: z.string(), item: clipboardItemSchema })),
+  /** Asks a computer for a picture of its screen right now. */
+  m('screen.get', z.object({ requestId: z.string(), deviceId: z.string() })),
   m('computer.remove', z.object({ deviceId: z.string() })),
   /** Owner only: asks for an invite link that registers a new person with their own phone, computers and chats. */
   m('user.invite', z.object({})),
@@ -222,6 +228,7 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   m('telegram.linking', z.object({ url: z.string(), code: z.string(), expiresAt: z.number() })),
   m('clipboard.result', z.object({ requestId: z.string(), deviceId: z.string(), items: z.array(clipboardItemSchema).optional(), error: z.string().optional() })),
   m('clipboard.written', z.object({ requestId: z.string(), deviceId: z.string(), error: z.string().optional() })),
+  m('screen.result', z.object({ requestId: z.string(), deviceId: z.string(), image: screenImageSchema.optional(), error: z.string().optional() })),
   m('activity.result', z.object({
     at: z.number(),
     sessions: z.array(activitySessionSchema),
@@ -237,6 +244,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   m('clipboard.write', z.object({ requestId: z.string(), item: clipboardItemSchema })),
   m('clipboard.data', z.object({ requestId: z.string(), items: z.array(clipboardItemSchema).optional(), error: z.string().optional() })),
   m('clipboard.done', z.object({ requestId: z.string(), error: z.string().optional() })),
+  m('screen.capture', z.object({ requestId: z.string() })),
+  m('screen.image', z.object({ requestId: z.string(), image: screenImageSchema.optional(), error: z.string().optional() })),
   m('tool.result', z.object({ callId: z.string(), content: z.string(), isError: z.boolean() })),
   m('tool.output', z.object({ callId: z.string(), chunk: z.string(), stream: z.enum(['stdout', 'stderr']) })),
   m('tool.cancel', z.object({ callId: z.string() })),
@@ -246,7 +255,7 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
     shell: z.string(),
     projects: z.array(projectSchema).optional(),
     /**
-     * What this computer offers: 'tools' (VS Code extension), 'clipboard' (PocketClipboard),
+     * What this computer offers: 'tools' (VS Code extension), 'clipboard' (PocketClipboard), 'screenshot' (PocketClipboard answers screen.capture),
      * 'overlay' (PocketClipboard shows the chat on screen: it receives session events and may list sessions and read history).
      */
     capabilities: z.array(z.string()).optional(),
