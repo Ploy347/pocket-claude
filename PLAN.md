@@ -7,15 +7,15 @@
 **Код этапов 1–4 слит в `main`** (ветки `hoplite/barke-606b0886*` сохранены для истории), typecheck чистый, тесты 208/208.
 
 1. **Приёмка этапов 1–4** — по чек-листам ниже в разделах этапов:
-   - [ ] этап 1 — оверлей на Windows (двойной Alt, окно справа, копирование кода);
+   - [x] этап 1 — оверлей на Windows (двойной Alt, окно справа, копирование кода) — принято 2026-10-23;
    - [ ] этап 2 — несколько людей: приглашение, свои чаты и компьютеры у каждого;
    - [ ] этап 3 — Telegram-бот: меню буфера обмена;
    - [ ] этап 4 — Telegram-бот: чат с Claude, разрешения кнопками.
 2. **Сборка и подключение** (делается на Mac после приёмки кода):
-   - [ ] перезапустить relay и brain на новом коде (`launchctl kickstart -k gui/$UID/com.pocketclaude.{relay,brain}`), прогнать `pnpm tsx tools/scripts/e2e-smoke.ts --model haiku`;
-   - [ ] пересобрать `PocketClipboard.exe` с оверлеем (`bash tools/scripts/make-usb.sh`) и поставить поверх на ноутбук;
-   - [ ] собрать и поставить APK по USB;
-   - [ ] создать бота у @BotFather и включить его: `pocket-claude telegram <token>`, привязать из телефона (Настройки → Telegram).
+   - [x] перезапустить relay и brain на новом коде (`launchctl kickstart -k gui/$UID/com.pocketclaude.{relay,brain}`), прогнать `pnpm tsx tools/scripts/e2e-smoke.ts --model haiku`;
+   - [x] пересобрать `PocketClipboard.exe` с оверлеем (`bash tools/scripts/make-usb.sh`) и поставить поверх на ноутбук;
+   - [x] собрать и поставить APK по USB (0.5);
+   - [x] создать бота у @BotFather и включить его (`@njskgnjgsnsgjapp`, Mini App включено): `pocket-claude telegram <token>`, привязать из телефона (Настройки → Telegram).
 3. **Этап 5 — Mini App** (L) — код готов (5.1–5.3), ждёт приёмки в Telegram (5.4, чек-лист в разделе этапа):
    - [ ] на Mac: `pnpm --filter @pocket/mobile export:web`, перезапустить relay, `pocket-claude telegram app`;
    - [ ] в Telegram: кнопка меню «Pocket», `/app` → приложение открывается и само привязывается; чат с Claude, разрешения, буфер.
