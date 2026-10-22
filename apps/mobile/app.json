@@ -64,7 +64,7 @@
         "expo-camera",
         {
           "cameraPermission": "Pocket uses the camera to scan the pairing QR code.",
-          "microphonePermission": false
+          "microphonePermission": "Pocket uses the microphone for voice calls with the assistant."
         }
       ],
       [
@@ -86,7 +86,7 @@
         {
           "photosPermission": "Pocket attaches photos you pick to messages.",
           "cameraPermission": "Pocket uses the camera to take photos for messages.",
-          "microphonePermission": false
+          "microphonePermission": "Pocket uses the microphone for voice calls with the assistant."
         }
       ],
       "expo-video",
