@@ -44,7 +44,8 @@
     "ios": {
       "bundleIdentifier": "dev.pocketclaude.app",
       "supportsTablet": false,
-      "icon": "./assets/icon.png"
+      "icon": "./assets/icon.png",
+      "appleTeamId": "4D42LWMN69"
     },
     "plugins": [
       "expo-router",
