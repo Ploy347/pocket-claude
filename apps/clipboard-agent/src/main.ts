@@ -4,7 +4,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { parsePairingCode, serializeIdentity } from '@pocket/protocol';
+import { parsePairingCode, parsePairingUri, serializeIdentity, type PairingCode } from '@pocket/protocol';
 import { joinAccount, type WebSocketCtor } from '@pocket/transport';
 import WebSocket from 'ws';
 import { ClipboardAgent, type AgentState } from './agent.js';
@@ -71,17 +71,26 @@ function control(cmd: 'quit' | 'status' | 'overlay on' | 'overlay off'): Promise
 async function pair(): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    console.log('\nPair this computer with your Mac.');
-    console.log('On the phone: open the Lipton chat, tap the phone icon, then "Add a computer".\n');
-    const relay = (await rl.question(`Relay address [${DEFAULT_RELAY}]: `)).trim() || DEFAULT_RELAY;
-    const code = parsePairingCode((await rl.question('Code from the phone: ')).trim());
+    console.log('\nPair this computer with the phone.');
+    console.log('On the phone: open a chat, tap the phone icon, then "Add a computer". Paste the link it shows (or just the code).\n');
+    const pasted = (await rl.question('Link or code from the phone: ')).trim();
+    let relay = DEFAULT_RELAY;
+    let code: PairingCode;
+    if (/^pocketclaude:\/\//i.test(pasted)) {
+      const parsed = parsePairingUri(pasted);
+      relay = parsed.relayUrl;
+      code = parsed.code;
+    } else {
+      code = parsePairingCode(pasted);
+      relay = (await rl.question(`Relay address [${DEFAULT_RELAY}]: `)).trim() || DEFAULT_RELAY;
+    }
     const joined = await joinAccount({
       relayUrl: relay,
       code,
       role: 'executor',
       name: os.hostname(),
       WebSocket: WS,
-      confirmSafetyNumber: async (n) => (await rl.question(`Safety number ${n}. Same as on the phone? [y/N]: `)).trim().toLowerCase().startsWith('y'),
+      confirmSafetyNumber: async (n) => !(await rl.question(`Safety number ${n} (the phone shows the same one). Press Enter to continue, or type n to stop: `)).trim().toLowerCase().startsWith('n'),
     });
     saveState({
       relayUrl: relay,

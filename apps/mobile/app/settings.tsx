@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from '../src/haptics';
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import { alert } from '../src/alert';
+import { QrCode } from '../src/components/QrCode';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { IconName } from '../src/format';
 import { useLock } from '../src/lock';
@@ -64,15 +65,21 @@ export default function SettingsScreen() {
     client?.invite();
   };
 
+  // The invitation stays on screen as a QR code the friend scans with their phone; sharing the link is the fallback.
+  const invitation = state.invitation;
+  const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const invitation = state.invitation;
-    if (!invitation || !client) return;
-    client.clearInvitation();
+    if (!invitation) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [invitation]);
+  const shareInvite = useCallback(() => {
+    if (!invitation) return;
     const text = 'Join my Pocket: open the app, choose "Paste link" and paste this (valid 5 minutes)';
     if (shareViaTelegram(invitation.uri, text)) return;
     const message = `${text}\n${invitation.uri}`;
     void Share.share({ message }).catch(() => alert('Invite link', message));
-  }, [state.invitation, client]);
+  }, [invitation]);
 
   const telegramBot = state.host?.telegramBot;
   const linkTelegram = () => {
@@ -128,6 +135,26 @@ export default function SettingsScreen() {
             onPress={state.brainOnline ? invite : undefined}
           />
         ) : null}
+        {invitation ? (
+          <View style={styles.inviteCard}>
+            <Text style={styles.inviteTitle}>Let them scan this with Pocket</Text>
+            <Text style={styles.inviteHint}>On their phone: open Pocket → Scan. They pick a name and get their own chats.</Text>
+            <View style={styles.inviteQr}>
+              <QrCode value={invitation.uri} size={200} />
+            </View>
+            <View style={styles.inviteFoot}>
+              <Text style={styles.inviteHint}>
+                {invitation.expiresAt > now ? `Valid ${Math.max(0, Math.ceil((invitation.expiresAt - now) / 60000))} min` : 'Expired'}
+              </Text>
+              <Pressable onPress={shareInvite} hitSlop={8}>
+                <Text style={styles.inviteAction}>Send link</Text>
+              </Pressable>
+              <Pressable onPress={() => client?.clearInvitation()} hitSlop={8}>
+                <Text style={styles.inviteAction}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
 
         <Section title="Telegram" />
         <Row
@@ -167,6 +194,12 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
+  inviteCard: { marginHorizontal: 16, marginTop: 8, padding: 16, borderRadius: 14, backgroundColor: colors.surface, gap: 8 },
+  inviteTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  inviteHint: { color: colors.textMuted, fontSize: 13 },
+  inviteQr: { alignItems: 'center', paddingVertical: 8 },
+  inviteFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16 },
+  inviteAction: { color: colors.accent, fontSize: 14, fontWeight: '600' },
   root: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: 20, paddingHorizontal: 16 },
   back: { width: 28 },

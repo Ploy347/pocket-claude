@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import type { Persona } from '../persona';
 import { colors } from '../theme';
 import { ClaudeAvatar } from './ClaudeAvatar';
 
@@ -13,10 +14,10 @@ function Dot({ delay }: { delay: number }) {
   return <Animated.View style={[styles.dot, style]} />;
 }
 
-export function TypingBubble() {
+export function TypingBubble({ persona }: { persona?: Persona }) {
   return (
     <View style={styles.row}>
-      <ClaudeAvatar size={28} />
+      <ClaudeAvatar size={28} persona={persona} />
       <View style={styles.bubble}>
         <Dot delay={0} />
         <Dot delay={160} />

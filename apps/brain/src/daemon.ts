@@ -740,7 +740,7 @@ export class Brain {
       case 'computer.pair': {
         try {
           const ticket = this.startPairing(undefined, { userId });
-          this.link.send(from, { type: 'computer.pairing', payload: { code: ticket.code, safetyNumber: ticket.safetyNumber, expiresAt: ticket.expiresAt } });
+          this.link.send(from, { type: 'computer.pairing', payload: { code: ticket.code, safetyNumber: ticket.safetyNumber, expiresAt: ticket.expiresAt, uri: ticket.uri } });
         } catch (e) {
           this.sendError(from, 'pairing_failed', e instanceof Error ? e.message : String(e));
         }

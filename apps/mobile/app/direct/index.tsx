@@ -10,7 +10,7 @@ import { Avatar } from '../../src/components/Avatar';
 import { ClaudeAvatar } from '../../src/components/ClaudeAvatar';
 import { makeConversations, makeNotes, OWN, type FakeConversation } from '../../src/content/fake';
 import { connectionBanner, isActiveNow } from '../../src/direct';
-import { PERSONA } from '../../src/persona';
+import { personaFor } from '../../src/persona';
 import { relativeTime } from '../../src/format';
 import { useChatState, useSession } from '../../src/session';
 import { useLastOpened } from '../../src/state/unread';
@@ -36,12 +36,13 @@ function ClaudeRow({ session, now, active, onPress, onLongPress }: { session: Se
   const typing = session.state === 'running';
   const text = waiting ? 'Waiting for approval' : typing ? 'Typing…' : session.lastText?.replace(/\s+/g, ' ') || 'No messages yet';
   const bold = waiting || unread;
+  const persona = personaFor(session.sessionId);
   return (
     <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.row, session.hidden && styles.rowHidden, pressed && { backgroundColor: colors.surface }]}>
-      <ClaudeAvatar size={56} active={active} />
+      <ClaudeAvatar size={56} active={active} persona={persona} />
       <View style={styles.rowBody}>
         <Text style={[styles.name, bold && styles.nameBold]} numberOfLines={1}>
-          {PERSONA.username}
+          {persona.username}
         </Text>
         <Subtitle text={text} bold={bold} time={relativeTime(session.updatedAt, now)} />
       </View>
@@ -136,7 +137,7 @@ export default function DirectInbox() {
 
   const q = query.trim().toLowerCase();
   const rows = useMemo<Row[]>(() => {
-    const matching = state.sessions.filter((s) => !q || PERSONA.username.includes(q) || (s.lastText ?? '').toLowerCase().includes(q));
+    const matching = state.sessions.filter((s) => !q || personaFor(s.sessionId).username.includes(q) || s.title.toLowerCase().includes(q) || (s.lastText ?? '').toLowerCase().includes(q));
     const hidden = matching.filter((s) => s.hidden);
     const claude: Row[] = [
       ...matching.filter((s) => !s.hidden).map((session): Row => ({ kind: 'claude', session })),
@@ -191,6 +192,16 @@ export default function DirectInbox() {
         <Text style={styles.requests}>Requests</Text>
       </View>
       {state.host && !state.host.ready && state.host.reason ? <Text style={styles.notice}>{state.host.reason}</Text> : null}
+      {state.host?.user && !state.host.user.owner && state.computers.length === 0 ? (
+        <Pressable onPress={() => router.push('/direct/computers')} style={styles.setupCard}>
+          <Ionicons name="laptop-outline" size={22} color={colors.accent} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.setupTitle}>Connect your computer</Text>
+            <Text style={styles.setupHint}>Run PocketClipboard.exe on it and scan the code here: Claude then sees its screen and clipboard.</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </Pressable>
+      ) : null}
       {state.lastError ? (
         <Pressable onPress={() => client?.clearError()}>
           <Text style={[styles.notice, { color: colors.danger }]}>{state.lastError}</Text>
@@ -250,6 +261,9 @@ export default function DirectInbox() {
 }
 
 const styles = StyleSheet.create({
+  setupCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 16, marginBottom: 8, padding: 12, borderRadius: 12, backgroundColor: colors.surface },
+  setupTitle: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  setupHint: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   root: { flex: 1, backgroundColor: colors.bg },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, gap: 16 },
   handle: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },

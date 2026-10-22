@@ -222,7 +222,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
     activeId: z.string().nullable(),
     mac: z.object({ name: z.string(), projects: z.array(projectSchema) }).optional(),
   })),
-  m('computer.pairing', z.object({ code: z.string(), safetyNumber: z.string(), expiresAt: z.number() })),
+  /** `uri` is the same code as a pocketclaude://pair link with the relay inside: one paste or one QR scan for PocketClipboard. */
+  m('computer.pairing', z.object({ code: z.string(), safetyNumber: z.string(), expiresAt: z.number(), uri: z.string().optional() })),
   m('user.invitation', z.object({ uri: z.string(), code: z.string(), safetyNumber: z.string(), expiresAt: z.number() })),
   /** `url` opens the bot with the pairing code as its start parameter. */
   m('telegram.linking', z.object({ url: z.string(), code: z.string(), expiresAt: z.number() })),

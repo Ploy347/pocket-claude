@@ -6,6 +6,7 @@ import type { ChatItem } from '@pocket/client-core';
 import { formatResult } from '../format';
 import { CopyToPc } from '../pc-clipboard';
 import { colors, ownBubble, radius } from '../theme';
+import type { Persona } from '../persona';
 import { ClaudeAvatar } from './ClaudeAvatar';
 import { Markdown } from './Markdown';
 import { ToolCard } from './ToolCard';
@@ -13,7 +14,7 @@ import { ToolCard } from './ToolCard';
 const AVATAR = 28;
 const INDENT = AVATAR + 8;
 
-function ChatRowImpl({ item }: { item: ChatItem }) {
+function ChatRowImpl({ item, persona }: { item: ChatItem; persona?: Persona }) {
   switch (item.type) {
     case 'user':
       return (
@@ -43,7 +44,7 @@ function ChatRowImpl({ item }: { item: ChatItem }) {
       return (
         <View>
           <View style={styles.assistantWrap}>
-            <ClaudeAvatar size={AVATAR} />
+            <ClaudeAvatar size={AVATAR} persona={persona} />
             <View style={styles.assistantBubble}>
               <Markdown text={item.text} caret={item.streaming} />
             </View>

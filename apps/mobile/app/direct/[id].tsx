@@ -15,7 +15,7 @@ import { PermissionCard } from '../../src/components/PermissionCard';
 import { TypingBubble } from '../../src/components/TypingBubble';
 import { makeConversations, type FakeConversation } from '../../src/content/fake';
 import { isActiveNow } from '../../src/direct';
-import { PERSONA } from '../../src/persona';
+import { personaFor } from '../../src/persona';
 import { useChatState, useSession } from '../../src/session';
 import { markOpened } from '../../src/state/unread';
 import { colors, ownBubble, radius } from '../../src/theme';
@@ -87,6 +87,7 @@ function ClaudeThread({ id }: { id: string }) {
   const thread = state.threads[id] ?? EMPTY;
   const loaded = state.loaded[id] === true;
   const permissions = useMemo(() => state.permissions.filter((p) => p.sessionId === id), [state.permissions, id]);
+  const persona = useMemo(() => personaFor(id), [id]);
   const data = useMemo(() => [...thread].reverse(), [thread]);
   const running = session?.state === 'running' || session?.state === 'waiting_permission';
   const updatedAt = session?.updatedAt ?? 0;
@@ -158,8 +159,8 @@ function ClaudeThread({ id }: { id: string }) {
   return (
     <KeyboardAvoidingView style={styles.root} behavior="padding">
       <ThreadHeader
-        avatar={<ClaudeAvatar size={36} active={active} />}
-        title={PERSONA.name}
+        avatar={<ClaudeAvatar size={36} active={active} persona={persona} />}
+        title={persona.name}
         subtitle={status}
         subtitleColor={session?.state === 'waiting_permission' ? colors.warn : undefined}
         onCall={() => router.push({ pathname: '/direct/computers', params: { sessionId: id } })}
@@ -170,17 +171,17 @@ function ClaudeThread({ id }: { id: string }) {
         data={data}
         inverted
         keyExtractor={(it) => it.key}
-        renderItem={({ item }) => <ChatRow item={item} />}
+        renderItem={({ item }) => <ChatRow item={item} persona={persona} />}
         ItemSeparatorComponent={Separator}
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
-        ListHeaderComponent={working ? <TypingBubble /> : undefined}
+        ListHeaderComponent={working ? <TypingBubble persona={persona} /> : undefined}
         ListEmptyComponent={
           loaded ? (
             <View style={[styles.empty, { transform: [{ scaleY: -1 }] }]}>
-              <ClaudeAvatar size={72} />
-              <Text style={styles.emptyName}>{PERSONA.name}</Text>
+              <ClaudeAvatar size={72} persona={persona} />
+              <Text style={styles.emptyName}>{persona.name}</Text>
               <Text style={styles.emptyText}>Type / to pick a model, reasoning level and more.</Text>
             </View>
           ) : (

@@ -32,7 +32,8 @@ The phone app: see `apps/mobile/README.md`.
 ## Install
 
 - Mac: `apps/brain/install/install.sh` sets up LaunchAgents for the relay, the brain and a sleep blocker.
-- Windows: `tools/scripts/make-usb.sh` builds a folder with `PocketClipboard.exe` and the VS Code extension.
+- Windows: `tools/scripts/make-usb.sh` builds a folder with `PocketClipboard.exe` and the VS Code extension. A friend's laptop needs only the exe: run it, paste the link from the phone (chat → phone icon → Add a computer), done.
+- A friend: the owner opens Settings → Invite a person and shows the QR code; the friend scans it with Pocket, picks a name, then adds their computer and links Telegram from Settings. Their chats answer from the Mac without any access to its files.
 - iPhone: `npx expo run:ios --device --configuration Release` in `apps/mobile` on the Mac (Xcode needed); see `apps/mobile/README.md`.
 
 ## Telegram Mini App

@@ -3,8 +3,9 @@ import { MAC_DEVICE_ID, type Computer, type Project } from '@pocket/protocol';
 import * as Haptics from '../../src/haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { alert } from '../../src/alert';
+import { QrCode } from '../../src/components/QrCode';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScreenActive } from '../../src/hooks';
 import { useChatState, useSession } from '../../src/session';
@@ -89,22 +90,33 @@ function ProjectRow({
   );
 }
 
-function PairingCard({ code, safetyNumber, expiresAt, onCancel }: { code: string; safetyNumber: string; expiresAt: number; onCancel: () => void }) {
+function PairingCard({ code, safetyNumber, expiresAt, uri, onCancel }: { code: string; safetyNumber: string; expiresAt: number; uri?: string; onCancel: () => void }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
   const left = Math.max(0, Math.round((expiresAt - now) / 1000));
+  const link = uri ?? code;
+  const share = () => void Share.share({ message: link }).catch(() => {});
   return (
     <View style={styles.pairCard}>
       <Text style={styles.pairTitle}>Add a computer</Text>
-      <Text style={styles.step}>1. On the PC run PocketClipboard.exe from the USB stick (it installs itself and starts with Windows).</Text>
-      <Text style={styles.step}>2. Press Enter on the address, then type this code:</Text>
+      <Text style={styles.step}>1. On the PC run PocketClipboard.exe (it installs itself and starts with Windows).</Text>
+      <Text style={styles.step}>2. Paste this link into it, or let it read the QR code with the webcam:</Text>
+      {uri ? (
+        <View style={styles.qrWrap}>
+          <QrCode value={uri} size={168} />
+        </View>
+      ) : null}
       <Text selectable style={styles.code} numberOfLines={1} adjustsFontSizeToFit>
         {code}
       </Text>
-      <Text style={styles.step}>3. Check that the PC shows the same safety number:</Text>
+      <Pressable onPress={share} style={styles.shareRow} hitSlop={8}>
+        <Ionicons name="share-outline" size={18} color={colors.text} />
+        <Text style={styles.shareText}>Send the link to the PC</Text>
+      </Pressable>
+      <Text style={styles.step}>3. The PC shows this safety number; it should match:</Text>
       <Text selectable style={styles.safety}>
         {safetyNumber}
       </Text>
@@ -205,7 +217,7 @@ export default function ComputersScreen() {
         {session ? (
           <View style={styles.projects}>
             <Text style={styles.section}>This chat works on</Text>
-            {!canUseMac && toolComputers.length === 0 ? <Text style={styles.empty}>Add a computer with VS Code below: your chats work on your own computer.</Text> : null}
+            {!canUseMac && toolComputers.length === 0 ? <Text style={styles.empty}>Chats answer from the Mac. Add your computer below to let Claude see its screen and clipboard; with VS Code on it, Claude can work on its files too.</Text> : null}
             {canUseMac ? (
               <>
                 <View style={[styles.row, workOn === MAC_DEVICE_ID && styles.rowOn]}>
@@ -301,6 +313,9 @@ const styles = StyleSheet.create({
   pairTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
   step: { color: colors.textDim, fontSize: 13.5, lineHeight: 19 },
   code: { color: colors.text, fontFamily: mono, fontSize: 22, fontWeight: '700', letterSpacing: 0.5, textAlign: 'center', paddingVertical: 10 },
+  qrWrap: { alignItems: 'center', paddingVertical: 10 },
+  shareRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8 },
+  shareText: { color: colors.text, fontSize: 14, fontWeight: '600' },
   safety: { color: colors.textDim, fontFamily: mono, fontSize: 15, textAlign: 'center', paddingBottom: 4 },
   pairFoot: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 4 },
   wait: { flex: 1, color: colors.textMuted, fontSize: 12.5 },
