@@ -4,7 +4,9 @@
 #   com.pocketclaude.brain  the daemon running Claude Code
 #   com.pocketclaude.awake  keeps the Mac from sleeping while on power (skip with --no-awake)
 #
-#   install.sh [--public-url https://host:10000] [--relay-port 8797] [--relay-url URL] [--no-relay] [--no-awake]
+#   com.pocketclaude.ngrok  optional public address through an ngrok static domain (--ngrok https://name.ngrok-free.dev)
+#
+#   install.sh [--public-url https://host:10000] [--ngrok URL] [--relay-port 8797] [--relay-url URL] [--no-relay] [--no-awake]
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,9 +22,11 @@ PUBLIC_URL=""
 REMOTE_RELAY=""
 WITH_RELAY=1
 WITH_AWAKE=1
+NGROK_URL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --public-url) PUBLIC_URL="$2"; shift 2 ;;
+    --ngrok) NGROK_URL="$2"; PUBLIC_URL="$2"; shift 2 ;;
     --relay-port) RELAY_PORT="$2"; shift 2 ;;
     --relay-url) REMOTE_RELAY="$2"; WITH_RELAY=0; shift 2 ;;
     --no-relay) WITH_RELAY=0; shift ;;
@@ -59,6 +63,8 @@ render() {
     -e "s|__HOME__|$(esc "$HOME")|g" \
     -e "s|__LOGDIR__|$(esc "$LOG_DIR")|g" \
     -e "s|__RELAYENV__|$RELAY_ENV|g" \
+    -e "s|__NGROK__|$(esc "$(command -v ngrok || echo ngrok)")|g" \
+    -e "s|__NGROKURL__|$(esc "$NGROK_URL")|g" \
     "$HERE/$1.plist.template" > "$AGENTS/$1.plist"
 }
 
@@ -84,6 +90,12 @@ fi
 
 render com.pocketclaude.brain
 load com.pocketclaude.brain
+
+if [[ -n "$NGROK_URL" ]]; then
+  command -v ngrok >/dev/null || { echo "ngrok not found: brew install ngrok, then ngrok config add-authtoken <token>" >&2; exit 1; }
+  render com.pocketclaude.ngrok
+  load com.pocketclaude.ngrok
+fi
 
 if [[ "$WITH_AWAKE" -eq 1 ]]; then
   render com.pocketclaude.awake

@@ -15,7 +15,7 @@ import { OverlayWindow } from './overlay/window.js';
 import { windowsScreen } from './screenshot.js';
 
 const WS = WebSocket as unknown as WebSocketCtor;
-const DEFAULT_RELAY = 'https://macbook-pro-dmitrij.taild47d20.ts.net:10000';
+const DEFAULT_RELAY = 'https://trunks-fineness-grumbling.ngrok-free.dev';
 const APP = 'PocketClipboard';
 const win = process.platform === 'win32';
 const home = win ? path.join(process.env.LOCALAPPDATA ?? os.homedir(), APP) : path.join(os.homedir(), '.pocket-clipboard');

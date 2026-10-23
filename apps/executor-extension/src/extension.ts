@@ -20,7 +20,7 @@ import { shellName } from './tools/workspace-info.js';
 
 const WS = WebSocket as unknown as WebSocketCtor;
 const REPLAY_SAVE_INTERVAL_MS = 30_000;
-const DEFAULT_RELAY = 'https://macbook-pro-dmitrij.taild47d20.ts.net:10000';
+const DEFAULT_RELAY = 'https://trunks-fineness-grumbling.ngrok-free.dev';
 const HISTORY_KEY = 'pocketClaude.projectHistory';
 
 function findRipgrep(): string | undefined {

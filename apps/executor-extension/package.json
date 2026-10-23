@@ -58,7 +58,7 @@
       "properties": {
         "pocketClaude.relayUrl": {
           "type": "string",
-          "default": "https://macbook-pro-dmitrij.taild47d20.ts.net:10000",
+          "default": "https://trunks-fineness-grumbling.ngrok-free.dev",
           "description": "Relay address used when pairing. Paired computers follow the Mac automatically if it changes."
         }
       }
