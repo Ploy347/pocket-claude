@@ -4,6 +4,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState, type ReactNode } from 'react';
 import { SafeAreaInsetsContext, SafeAreaProvider } from 'react-native-safe-area-context';
+import { CallBar, CallProvider } from '../src/call';
 import { LockProvider } from '../src/lock';
 import { PcClipboardProvider } from '../src/pc-clipboard';
 import { SessionProvider, useSession } from '../src/session';
@@ -66,7 +67,8 @@ function Routes({ fontsReady }: { fontsReady: boolean }) {
   return (
     <>
       <TelegramBackButton />
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'slide_from_right' }}>
+      {/* Hidden screens (the feed under a chat, a chat under the call) do not re-render while covered. */}
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'slide_from_right', freezeOnBlur: true }}>
         <Stack.Protected guard={paired}>
           <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
           <Stack.Screen name="direct/index" />
@@ -81,6 +83,7 @@ function Routes({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="pair" />
         </Stack.Protected>
       </Stack>
+      {paired ? <CallBar /> : null}
     </>
   );
 }
@@ -93,9 +96,11 @@ export default function RootLayout() {
         <StatusBar style="light" />
         <SessionProvider>
           <PcClipboardProvider>
-            <LockProvider>
-              <Routes fontsReady={fontsLoaded || fontError !== null} />
-            </LockProvider>
+            <CallProvider>
+              <LockProvider>
+                <Routes fontsReady={fontsLoaded || fontError !== null} />
+              </LockProvider>
+            </CallProvider>
           </PcClipboardProvider>
         </SessionProvider>
       </TelegramInsets>

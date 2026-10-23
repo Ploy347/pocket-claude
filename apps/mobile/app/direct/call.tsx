@@ -1,116 +1,113 @@
 import { Ionicons } from '@expo/vector-icons';
-import { setAudioModeAsync } from 'expo-audio';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PHASE_LABEL, useCall, useElapsed } from '../../src/call';
+import { useCallPrefs } from '../../src/call-prefs';
 import { ClaudeAvatar } from '../../src/components/ClaudeAvatar';
+import { useAppActive } from '../../src/hooks';
 import { personaFor } from '../../src/persona';
-import { useChatSelector, useSession } from '../../src/session';
+import { useChatSelector } from '../../src/session';
 import { colors } from '../../src/theme';
-import { callLanguage, VoiceCall, type CallSnapshot } from '../../src/voice';
 
-const PHASE_LABEL: Record<CallSnapshot['phase'], string> = {
-  starting: 'Connecting…',
-  listening: 'Listening',
-  thinking: 'Thinking…',
-  speaking: 'Speaking',
-  muted: 'Muted',
-  ended: 'Call ended',
-  error: 'Call failed',
-};
-
-function deviceLanguage(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().locale;
-  } catch {
-    return undefined;
-  }
-}
-
-/** A voice call with the chat: speak, pause, hear the answer; works with the screen off (background audio). */
+/**
+ * A voice call with the chat: talk, pause, hear the answer. Leaving the screen keeps the call going (green bar on
+ * top); with the screen locked the iPhone shows it as a phone call.
+ */
 export default function CallScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const sessionId = id ?? '';
-  const { client } = useSession();
+  const call = useCall();
+  const prefs = useCallPrefs();
   const persona = useMemo(() => personaFor(sessionId), [sessionId]);
-  const thread = useChatSelector((s) => s.threads[sessionId]);
   const brainOnline = useChatSelector((s) => s.brainOnline);
-  const [snap, setSnap] = useState<CallSnapshot>({ phase: 'starting', heard: '', said: '' });
-  const [muted, setMuted] = useState(false);
-  const [seconds, setSeconds] = useState(0);
-  const call = useRef<VoiceCall | null>(null);
-  const lastReplyKey = useRef<string | null>(null);
+  const appActive = useAppActive();
+  const [speaker, setSpeaker] = useState(prefs.speaker);
+  const { start } = call;
+  const mine = call.active?.sessionId === sessionId;
+  const snap = mine ? call.snapshot : null;
+  const elapsed = useElapsed(mine ? call.active?.startedAt : undefined, appActive);
 
   useEffect(() => {
-    if (!client) return;
-    const language = callLanguage(deviceLanguage());
-    const c = new VoiceCall({ send: (text) => client.send(sessionId, text, undefined, { voice: true }), onChange: setSnap, language });
-    call.current = c;
-    void setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' }).catch(() => {});
-    void c.start();
-    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => {
-      clearInterval(timer);
-      c.end();
-      call.current = null;
-      void setAudioModeAsync({ allowsRecording: false, shouldPlayInBackground: false }).catch(() => {});
-    };
-  }, [client, sessionId]);
+    if (Platform.OS !== 'web' && sessionId) start(sessionId);
+  }, [sessionId, start]);
 
-  // Read the latest reply aloud as it streams; a new reply resets what was spoken.
+  // Hung up from the lock screen or a headset.
   useEffect(() => {
-    const c = call.current;
-    if (!c || !thread) return;
-    const last = thread[thread.length - 1];
-    if (!last || last.type !== 'assistant') return;
-    if (last.key !== lastReplyKey.current) {
-      lastReplyKey.current = last.key;
-      c.newReply();
+    if (snap?.phase === 'ended') {
+      call.hangUp();
+      if (router.canGoBack()) router.back();
     }
-    c.onReply(last.text, last.streaming);
-  }, [thread]);
+  }, [snap?.phase, call, router]);
 
-  const toggleMute = () => {
-    const next = !muted;
-    setMuted(next);
-    call.current?.setMuted(next);
-  };
+  useEffect(() => {
+    if (snap?.route) setSpeaker(snap.route === 'speaker');
+  }, [snap?.route]);
+
+  const phase = snap?.phase ?? 'starting';
+  const speaking = phase === 'speaking';
+  const muted = phase === 'muted';
 
   const hangUp = () => {
-    call.current?.end();
+    call.hangUp();
     router.back();
   };
 
-  const status = !brainOnline ? 'Mac offline' : snap.phase === 'error' ? (snap.error ?? PHASE_LABEL.error) : PHASE_LABEL[snap.phase];
-  const line = snap.phase === 'speaking' ? snap.said : snap.heard;
+  const toggleSpeaker = () => {
+    const next = !speaker;
+    setSpeaker(next);
+    call.setSpeaker(next);
+  };
+
+  const shareLog = () => {
+    const log = call.log();
+    if (log) void Share.share({ message: log }).catch(() => {});
+  };
+
+  const status = snap?.error ?? (!brainOnline && phase !== 'error' ? 'Mac offline' : PHASE_LABEL[phase]);
+  const line = speaking ? snap?.said : snap?.heard;
+  const placeholder = phase === 'listening' ? 'Say something; a short pause sends it.' : phase === 'thinking' ? 'Claude is on it…' : ' ';
+  const badges = [snap?.callKit ? 'Phone call' : null, snap?.echoCancellation ? 'Talk over it' : null, snap?.voiceName ? `Voice: ${snap.voiceName}` : null].filter(Boolean);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
       <View style={styles.top}>
-        <ClaudeAvatar size={120} persona={persona} active={snap.phase === 'listening'} />
+        <ClaudeAvatar size={120} persona={persona} active={snap?.userSpeaking === true || phase === 'listening'} />
         <Text style={styles.name}>{persona.name}</Text>
-        <Text style={styles.timer}>
-          {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
-        </Text>
-        <Text style={[styles.status, snap.phase === 'error' && { color: colors.danger }, snap.phase === 'listening' && { color: colors.ok }]}>{status}</Text>
+        <Text style={styles.timer}>{elapsed}</Text>
+        <Pressable onLongPress={shareLog} delayLongPress={600} hitSlop={8} accessibilityHint="Long press to send the call log">
+          <Text style={[styles.status, phase === 'error' && { color: colors.danger }, phase === 'listening' && { color: colors.ok }]}>{status}</Text>
+        </Pressable>
+        {badges.length ? <Text style={styles.badges}>{badges.join(' · ')}</Text> : null}
       </View>
-      <Pressable onPress={() => call.current?.interrupt()} style={styles.transcript} disabled={snap.phase !== 'speaking'}>
-        <Text style={styles.line} numberOfLines={6}>
-          {line || (snap.phase === 'listening' ? 'Say something; a short pause sends it.' : ' ')}
+
+      <Pressable onPress={() => call.interrupt()} style={styles.transcript} disabled={!speaking}>
+        <Text style={styles.line} numberOfLines={7}>
+          {line || placeholder}
         </Text>
-        {snap.phase === 'speaking' ? <Text style={styles.hint}>Tap to interrupt</Text> : null}
+        {speaking ? <Text style={styles.hint}>{snap?.echoCancellation && prefs.bargeIn ? 'Tap or just talk to interrupt' : 'Tap to interrupt'}</Text> : null}
+        {snap?.notice && phase !== 'error' ? <Text style={[styles.hint, styles.notice]}>{snap.notice}</Text> : null}
       </Pressable>
+
       <View style={styles.controls}>
-        <Pressable onPress={toggleMute} style={[styles.round, muted && styles.roundOn]} accessibilityLabel={muted ? 'Unmute' : 'Mute'}>
+        <Pressable
+          onPress={() => call.setMuted(!muted)}
+          style={[styles.round, muted && styles.roundOn]}
+          accessibilityLabel={muted ? 'Unmute' : 'Mute'}
+          disabled={phase === 'error'}
+        >
           <Ionicons name={muted ? 'mic-off' : 'mic'} size={28} color={muted ? colors.bg : colors.text} />
+        </Pressable>
+        <Pressable onPress={toggleSpeaker} style={[styles.round, speaker && styles.roundOn]} accessibilityLabel={speaker ? 'Earpiece' : 'Speaker'} disabled={phase === 'error'}>
+          <Ionicons name={speaker ? 'volume-high' : 'volume-medium-outline'} size={28} color={speaker ? colors.bg : colors.text} />
         </Pressable>
         <Pressable onPress={hangUp} style={[styles.round, styles.hangUp]} accessibilityLabel="End call">
           <Ionicons name="call" size={30} color="#FFFFFF" style={{ transform: [{ rotate: '135deg' }] }} />
         </Pressable>
-        <Pressable onPress={() => router.back()} style={styles.round} accessibilityLabel="Back to chat">
+        <Pressable onPress={() => router.back()} style={styles.round} accessibilityLabel="Back to chat, the call goes on">
           <Ionicons name="chatbubble-ellipses-outline" size={26} color={colors.text} />
         </Pressable>
       </View>
@@ -124,11 +121,13 @@ const styles = StyleSheet.create({
   top: { alignItems: 'center', gap: 8 },
   name: { color: colors.text, fontSize: 26, fontWeight: '700', marginTop: 12 },
   timer: { color: colors.textMuted, fontSize: 15, fontVariant: ['tabular-nums'] },
-  status: { color: colors.textMuted, fontSize: 15, marginTop: 4 },
+  status: { color: colors.textMuted, fontSize: 15, marginTop: 4, textAlign: 'center' },
+  badges: { color: colors.textMuted, fontSize: 12, textAlign: 'center' },
   transcript: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 24 },
   line: { color: colors.text, fontSize: 18, lineHeight: 26, textAlign: 'center' },
   hint: { color: colors.textMuted, fontSize: 13, marginTop: 12, textAlign: 'center' },
-  controls: { flexDirection: 'row', alignItems: 'center', gap: 28 },
+  notice: { color: colors.warn },
+  controls: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   round: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   roundOn: { backgroundColor: colors.text },
   hangUp: { backgroundColor: colors.danger, width: 76, height: 76, borderRadius: 38 },

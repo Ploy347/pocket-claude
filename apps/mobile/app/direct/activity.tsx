@@ -13,7 +13,8 @@ import { useScreenActive } from '../../src/hooks';
 import { useChatSelector, useChatState, useSession } from '../../src/session';
 import { colors, mono } from '../../src/theme';
 
-const POLL_MS = 1500;
+// The Mac reports running agents; every 3 s is live enough and halves the traffic.
+const POLL_MS = 3000;
 
 function elapsed(since: number, now: number): string {
   const s = Math.max(0, Math.floor((now - since) / 1000));

@@ -1,17 +1,27 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Speech from 'expo-speech';
 import * as Haptics from '../src/haptics';
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import { alert } from '../src/alert';
+import { setCallPrefs, useCallPrefs } from '../src/call-prefs';
 import { QrCode } from '../src/components/QrCode';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { IconName } from '../src/format';
 import { useLock } from '../src/lock';
 import { useChatState, useSession } from '../src/session';
+import { listVoices, nativeCalls, preferredLanguages } from '../src/speech-engine';
 import { openTelegramLink, shareViaTelegram } from '../src/telegram';
 import { colors, mono } from '../src/theme';
+import { resolveCallLanguage } from '../src/voice';
+
+const CALL_LANGUAGES = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'ru-RU', label: 'Русский' },
+  { value: 'en-US', label: 'English' },
+];
 
 function Section({ title }: { title: string }) {
   return <Text style={styles.section}>{title}</Text>;
@@ -109,6 +119,51 @@ export default function SettingsScreen() {
       },
     ]);
 
+  const callPrefs = useCallPrefs();
+  const callLanguage = resolveCallLanguage(callPrefs.language, preferredLanguages());
+  const [voiceName, setVoiceName] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (!callPrefs.voice) {
+      setVoiceName(null);
+      return;
+    }
+    void listVoices(callLanguage)
+      .then((voices) => live && setVoiceName(voices.find((v) => v.identifier === callPrefs.voice)?.name ?? null))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [callPrefs.voice, callLanguage]);
+
+  const cycleCallLanguage = () => {
+    const i = CALL_LANGUAGES.findIndex((l) => l.value === callPrefs.language);
+    // A voice belongs to a language: the best one for the new language is picked.
+    setCallPrefs({ language: CALL_LANGUAGES[(i + 1) % CALL_LANGUAGES.length]!.value, voice: null });
+  };
+
+  const pickVoice = async () => {
+    const voices = (await listVoices(callLanguage).catch(() => [])).slice(0, 8);
+    const sample = callLanguage.startsWith('ru') ? 'Привет! Так я буду звучать в звонке.' : 'Hi! This is how I will sound on a call.';
+    const choose = (voice: string | null) => {
+      setCallPrefs({ voice });
+      void Speech.stop();
+      Speech.speak(sample, { language: callLanguage, ...(voice ? { voice } : {}) });
+    };
+    const quality = (q: string) => (q === 'premium' ? ' (Premium)' : q === 'enhanced' ? ' (Enhanced)' : '');
+    alert(
+      'Voice',
+      voices.length
+        ? 'Enhanced and Premium voices sound far more natural. Download more in iPhone Settings → Accessibility → Spoken Content → Voices.'
+        : 'No voices for this language yet: iPhone Settings → Accessibility → Spoken Content → Voices.',
+      [
+        { text: 'Best installed', onPress: () => choose(null) },
+        ...voices.map((v) => ({ text: `${v.name}${quality(v.quality)}`, onPress: () => choose(v.identifier) })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ],
+    );
+  };
+
   const confirmUnpair = () =>
     alert('Unpair this phone?', 'The keys on this phone are erased. You will need to pair again with a new code.', [
       { text: 'Cancel', style: 'cancel' },
@@ -164,6 +219,38 @@ export default function SettingsScreen() {
           tint={telegramBot ? colors.accent : colors.text}
           onPress={telegramBot && state.brainOnline ? linkTelegram : undefined}
         />
+
+        <Section title="Voice calls" />
+        <Row
+          icon="language-outline"
+          label="Language"
+          value={callPrefs.language === 'auto' ? `Auto · ${callLanguage}` : (CALL_LANGUAGES.find((l) => l.value === callPrefs.language)?.label ?? callPrefs.language)}
+          hint="What you speak on calls; the voice follows it"
+          onPress={cycleCallLanguage}
+        />
+        <Row icon="mic-outline" label="Voice" value={voiceName ?? 'Best installed'} hint="Tap to hear and pick a voice" onPress={() => void pickVoice()} />
+        <Row
+          icon="volume-high-outline"
+          label="Speaker"
+          hint="Loudspeaker by default; headphones always win"
+          right={<Switch value={callPrefs.speaker} onValueChange={(v) => setCallPrefs({ speaker: v })} trackColor={{ false: colors.borderHi, true: colors.accent }} thumbColor="#FFFFFF" />}
+        />
+        {nativeCalls ? (
+          <>
+            <Row
+              icon="call-outline"
+              label="Show as a phone call"
+              hint="Call controls on the lock screen and the green status bar; turn off if calls misbehave"
+              right={<Switch value={callPrefs.callKit} onValueChange={(v) => setCallPrefs({ callKit: v })} trackColor={{ false: colors.borderHi, true: colors.accent }} thumbColor="#FFFFFF" />}
+            />
+            <Row
+              icon="hand-left-outline"
+              label="Talk over the answer"
+              hint="Speaking while it answers stops it"
+              right={<Switch value={callPrefs.bargeIn} onValueChange={(v) => setCallPrefs({ bargeIn: v })} trackColor={{ false: colors.borderHi, true: colors.accent }} thumbColor="#FFFFFF" />}
+            />
+          </>
+        ) : null}
 
         <Section title="Connection" />
         <Row icon="cloud-outline" label="Relay" value={credentials?.relayUrl ?? '—'} />

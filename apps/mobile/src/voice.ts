@@ -1,31 +1,8 @@
-import * as Speech from 'expo-speech';
-import { ExpoSpeechRecognitionModule, type ExpoSpeechRecognitionResultEvent } from 'expo-speech-recognition';
-import { Platform } from 'react-native';
+import { shortToolName, summarizeTool, type ChatItem, type PermissionRequest } from '@pocket/client-core';
+import type { PermissionDecision, SessionState } from '@pocket/protocol';
 
-export type CallPhase = 'starting' | 'listening' | 'thinking' | 'speaking' | 'muted' | 'ended' | 'error';
-
-export interface CallSnapshot {
-  phase: CallPhase;
-  /** What the recognizer heard so far of the current utterance. */
-  heard: string;
-  /** The last sentence read aloud. */
-  said: string;
-  error?: string;
-}
-
-export interface VoiceCallDeps {
-  /** Sends one spoken utterance to the chat; false when not connected. */
-  send: (text: string) => boolean;
-  onChange: (s: CallSnapshot) => void;
-  /** BCP 47, e.g. ru-RU; decides both recognition and the voice. */
-  language: string;
-  /** Silence after the last heard word that ends an utterance. */
-  silenceMs?: number;
-}
-
-const SILENCE_MS = 1200;
-/** Sentence ends we can read aloud before the rest of the reply has streamed in. */
-const SENTENCE_END = /[.!?…]+["»)]?\s+/g;
+// ---------------------------------------------------------------------------------------------------------------
+// Text helpers
 
 /** Strips what makes no sense read aloud: fences, inline code marks, list markers, emphasis. */
 export function speakable(text: string): string {
@@ -43,6 +20,9 @@ export function speakable(text: string): string {
     .trim();
 }
 
+/** Sentence ends we can read aloud before the rest of the reply has streamed in. */
+const SENTENCE_END = /[.!?…]+["»)]?\s+/g;
+
 /** Splits streamed text into the sentences that are complete; the tail stays until more arrives or the reply ends. */
 export function completeSentences(text: string): { done: string[]; rest: string } {
   const done: string[] = [];
@@ -54,187 +34,718 @@ export function completeSentences(text: string): { done: string[]; rest: string 
   return { done: done.filter(Boolean), rest: text.slice(last) };
 }
 
+/** Lower-case words without punctuation; ё reads as е. */
+export function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/’/g, "'")
+    .split(/[\s.,!?;:…"«»„“”()[\]{}<>/\\|*_~`#+=@%^&$—–-]+/)
+    .filter(Boolean);
+}
+
+const REGIONS: Record<string, string> = {
+  ru: 'ru-RU',
+  en: 'en-US',
+  uk: 'uk-UA',
+  de: 'de-DE',
+  fr: 'fr-FR',
+  es: 'es-ES',
+  it: 'it-IT',
+  pt: 'pt-BR',
+  pl: 'pl-PL',
+  tr: 'tr-TR',
+  kk: 'kk-KZ',
+  zh: 'zh-CN',
+  ja: 'ja-JP',
+  ko: 'ko-KR',
+};
+
+/** A BCP 47 tag with a region, as speech recognition wants it: ru → ru-RU, en-GB stays, nothing → en-US. */
+export function callLanguage(locale: string | undefined): string {
+  if (!locale) return 'en-US';
+  const [rawLang = '', region] = locale.replace(/_/g, '-').split('-');
+  const lang = rawLang.toLowerCase();
+  if (lang === 'ru') return 'ru-RU';
+  if (region && /^[A-Za-z]{2}$/.test(region)) return `${lang}-${region.toUpperCase()}`;
+  return REGIONS[lang] ?? `${lang}-${lang.toUpperCase()}`;
+}
+
+/** The language picked in Settings, or the phone's first preferred language. */
+export function resolveCallLanguage(choice: string, preferred: readonly string[]): string {
+  if (choice && choice !== 'auto') return choice;
+  return callLanguage(preferred[0]);
+}
+
+export type CallLang = 'ru' | 'en';
+
+export function callLang(language: string): CallLang {
+  return language.toLowerCase().startsWith('ru') ? 'ru' : 'en';
+}
+
+/** Words after which people usually go on: a pause there is not the end of the sentence. */
+const HOLD_WORDS: Record<CallLang, string[]> = {
+  ru: ['и', 'а', 'но', 'или', 'что', 'чтобы', 'потому', 'если', 'когда', 'который', 'которая', 'которые', 'это', 'ну', 'вот', 'типа', 'в', 'на', 'с', 'к', 'по', 'для', 'из', 'за', 'от', 'до', 'о', 'про', 'же', 'еще', 'как', 'где', 'то', 'там'],
+  en: ['and', 'but', 'or', 'so', 'because', 'that', 'the', 'a', 'an', 'to', 'of', 'for', 'with', 'if', 'when', 'which', 'um', 'uh', 'like', 'is', 'are', 'my', 'your'],
+};
+
+export function holdWords(lang: CallLang): string[] {
+  return HOLD_WORDS[lang];
+}
+
 /**
- * The call: listens until the user pauses, sends what was said, reads the reply aloud sentence by sentence as it streams,
- * then listens again. The microphone is off while the phone speaks so the recognizer does not hear the reply.
+ * How long a pause ends an utterance: shorter after a full stop the recognizer punctuated, longer after "and",
+ * "что" and the like. The native engine applies the same rule (CallEngine.endpointDelay).
+ */
+export function endpointDelay(text: string, silenceMs: number, hold: readonly string[]): number {
+  const trimmed = text.trim();
+  let wait = silenceMs;
+  if (/[.!?…]$/.test(trimmed)) wait = Math.min(wait, 700);
+  const last = words(trimmed).at(-1) ?? '';
+  if (hold.includes(last)) wait += 700;
+  return wait;
+}
+
+const STOP_WORDS = new Set(['стоп', 'хватит', 'подожди', 'погоди', 'стой', 'замолчи', 'тихо', 'stop', 'wait', 'enough', 'quiet']);
+
+/** Only "stop", "wait"…: the user wants silence, not an answer. */
+export function isStopRequest(text: string): boolean {
+  const said = words(text);
+  return said.length > 0 && said.length <= 2 && said.some((w) => STOP_WORDS.has(w));
+}
+
+/**
+ * Speech heard while the phone talks: the user cutting in, or what is left of the phone's own voice after echo
+ * cancellation. A stop word or two words that mostly are not in the sentence being read count as cutting in.
+ */
+export function isBargeIn(heard: string, speaking: string): boolean {
+  const said = words(heard);
+  if (said.length === 0) return false;
+  if (said.some((w) => STOP_WORDS.has(w))) return true;
+  if (said.length < 2) return false;
+  const reading = new Set(words(speaking));
+  const echoed = said.filter((w) => reading.has(w)).length;
+  return echoed / said.length < 0.5;
+}
+
+const YES = new Set(['да', 'ага', 'угу', 'давай', 'можно', 'разрешаю', 'разреши', 'конечно', 'хорошо', 'ок', 'окей', 'валяй', 'yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'allow', 'go']);
+const NO = new Set(['нет', 'неа', 'нельзя', 'запрещаю', 'отмена', 'отмени', 'стоп', 'no', 'nope', 'deny', 'cancel', 'stop']);
+const NOT = new Set(['не', "don't", 'dont', 'not']);
+
+/** "Да" / "нет" to a permission question; null when the answer is something else. */
+export function parseYesNo(text: string): 'yes' | 'no' | null {
+  const said = words(text);
+  if (said.some((w, i) => NOT.has(w) && i < said.length - 1)) return 'no';
+  const yes = said.some((w) => YES.has(w));
+  const no = said.some((w) => NO.has(w));
+  if (no && !yes) return 'no';
+  if (yes && !no) return 'yes';
+  return null;
+}
+
+const PHRASES = {
+  ru: {
+    permission: (what: string) => `Нужно разрешение: ${what}. Разрешить?`,
+    yesOrNo: 'Скажите «да» или «нет».',
+    allowed: 'Разрешил.',
+    denied: 'Отказал.',
+    onScreen: 'Ответьте на экране.',
+    rest: 'Остальное — в чате.',
+    offline: 'Нет связи с Маком.',
+  },
+  en: {
+    permission: (what: string) => `Claude needs permission: ${what}. Allow it?`,
+    yesOrNo: 'Please say yes or no.',
+    allowed: 'Allowed.',
+    denied: 'Denied.',
+    onScreen: 'Please answer on the screen.',
+    rest: 'The rest is in the chat.',
+    offline: 'The Mac is offline.',
+  },
+} as const;
+
+/** The question read aloud for a permission prompt: the tool and what it touches, without paths read letter by letter. */
+export function permissionQuestion(tool: string, input: unknown, lang: CallLang): string {
+  const name = shortToolName(tool).replace(/_/g, ' ');
+  const detail = speakable(summarizeTool(input, 70))
+    .replace(/[/\\]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return PHRASES[lang].permission(detail ? `${name}, ${detail}` : name);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The engine interface: native on iOS (modules/pocket-call), expo-speech-recognition + expo-speech elsewhere.
+
+export type CaptureMode = 'off' | 'listen' | 'watch';
+export type VoiceQuality = 'default' | 'enhanced' | 'premium';
+
+export type EngineEvent =
+  | { type: 'state'; state: 'connecting' | 'active' | 'held' | 'ended'; reason?: string }
+  | { type: 'vad'; speaking: boolean }
+  | { type: 'capture'; active: boolean }
+  | { type: 'partial'; text: string }
+  | { type: 'final'; text: string }
+  | { type: 'recognitionError'; code: string; message: string }
+  | { type: 'speechStart'; id: string }
+  | { type: 'speechEnd'; id: string; interrupted: boolean }
+  | { type: 'speechIdle' }
+  | { type: 'muted'; muted: boolean }
+  | { type: 'route'; output: string }
+  | { type: 'error'; code: string; message: string; fatal: boolean }
+  | { type: 'log'; message: string };
+
+export interface EngineStartOptions {
+  language: string;
+  voice: string | null;
+  callerName: string;
+  speaker: boolean;
+  useCallKit: boolean;
+  silenceMs: number;
+  holdWords: string[];
+  contextualStrings: string[];
+}
+
+export interface EngineInfo {
+  /** The phone's own voice is removed from the microphone: the user can talk over it. */
+  echoCancellation: boolean;
+  callKit: boolean;
+  voiceName: string | null;
+  voiceQuality: VoiceQuality | null;
+}
+
+export interface SpeechEngine {
+  start(options: EngineStartOptions): Promise<EngineInfo>;
+  end(): void;
+  setMode(mode: CaptureMode): void;
+  cancelCapture(): void;
+  speak(id: string, text: string): void;
+  stopSpeaking(): void;
+  setThinking(on: boolean): void;
+  setMuted(muted: boolean): void;
+  setSpeaker(on: boolean): void;
+  subscribe(listener: (event: EngineEvent) => void): () => void;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The call
+
+export type CallPhase = 'starting' | 'listening' | 'thinking' | 'speaking' | 'confirming' | 'muted' | 'held' | 'ended' | 'error';
+
+export interface CallSnapshot {
+  phase: CallPhase;
+  /** What the user is saying, or said last. */
+  heard: string;
+  /** The sentence being read aloud. */
+  said: string;
+  userSpeaking: boolean;
+  error?: string;
+  /** Something worth knowing that does not stop the call. */
+  notice?: string;
+  echoCancellation: boolean;
+  callKit: boolean;
+  voiceName: string | null;
+  voiceQuality: VoiceQuality | null;
+  /** speaker, receiver, bluetooth, headphones… */
+  route: string;
+  /** The call was ended from the lock screen, a headset or by the system. */
+  endedRemotely?: boolean;
+}
+
+export interface VoiceCallDeps {
+  engine: SpeechEngine;
+  /** Sends one utterance to the chat; false when not connected. */
+  send: (text: string) => boolean;
+  respondPermission: (requestId: string, decision: PermissionDecision) => boolean;
+  onChange: (snapshot: CallSnapshot) => void;
+  /** BCP 47, e.g. ru-RU: recognition, the voice and the phone's own phrases. */
+  language: string;
+  voice?: string | null;
+  callerName: string;
+  speaker?: boolean;
+  useCallKit?: boolean;
+  /** Talking over the phone stops it (needs echo cancellation). */
+  bargeIn?: boolean;
+  silenceMs?: number;
+  /** The chat as it is when the call starts: none of it is read aloud. */
+  initialThread: readonly ChatItem[];
+}
+
+const SILENCE_MS = 1100;
+/** Silence after an utterance before the soft "thinking" sound starts. */
+const THINKING_SOUND_AFTER_MS = 900;
+/** A reply longer than this is cut short with "the rest is in the chat". */
+const MAX_SPOKEN_PER_TURN = 1200;
+const LOG_LINES = 150;
+
+/**
+ * A voice call with one chat. Listens, sends what the user said, reads the reply aloud sentence by sentence as it
+ * streams, and goes back to listening when Claude's turn is over (not when one text block ends: tools may follow).
+ * The user can talk over the reply when the engine cancels echo, answer permission prompts with "да"/"нет", and the
  */
 export class VoiceCall {
-  private snapshot: CallSnapshot = { phase: 'starting', heard: '', said: '' };
-  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
-  private subs: { remove: () => void }[] = [];
-  private listening = false;
-  private muted = false;
+  private snap: CallSnapshot;
+  private lastSent: CallSnapshot | null = null;
+  private readonly lang: CallLang;
+  private info: EngineInfo | null = null;
+  private unsubscribe: (() => void) | null = null;
   private ended = false;
-  /** Reply being spoken: the characters already handed to the speech engine. */
-  private spokenUpTo = 0;
-  private speakQueue: string[] = [];
-  private speaking = false;
-  private awaitingReply = false;
-  /** The user cut a reply short: the rest of it is not read. */
-  private skipReply = false;
+  private failed = false;
+  private muted = false;
+  private held = false;
+  private mode: CaptureMode = 'off';
+  private thinkingSound = false;
+  private thinkingTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private readonly deps: VoiceCallDeps) {}
+  // The chat
+  private items: readonly ChatItem[];
+  private sessionState: SessionState | undefined;
+  /** Assistant item key → characters of its speakable text already queued. */
+  private readonly spoken = new Map<string, number>();
+  /** Utterances sent during this call: the last that many user messages of the thread are ours. */
+  private sentCount = 0;
+  private awaitingReply = false;
+  /** After the user cut in: assistant text up to here, and after it until the next user message, is skipped. */
+  private skipFrom = -1;
+  private spokenThisTurn = 0;
+  private turnCapped = false;
+
+  // Speech: sentences handed to the engine and not finished yet
+  private seq = 0;
+  private readonly pending = new Map<string, string>();
+  private readonly started = new Set<string>();
+  private current: string | null = null;
+
+  // Permissions
+  private readonly asked = new Set<string>();
+  private confirming: { requestId: string; retries: number } | null = null;
+
+  private readonly logLines: string[] = [];
+
+  constructor(private readonly deps: VoiceCallDeps) {
+    this.lang = callLang(deps.language);
+    this.items = deps.initialThread;
+    this.snap = {
+      phase: 'starting',
+      heard: '',
+      said: '',
+      userSpeaking: false,
+      echoCancellation: false,
+      callKit: false,
+      voiceName: null,
+      voiceQuality: null,
+      route: '',
+    };
+  }
+
+  snapshot(): CallSnapshot {
+    return this.snap;
+  }
+
+  /** The last lines of what happened, for "send diagnostics". */
+  log(): string {
+    return this.logLines.join('\n');
+  }
 
   async start(): Promise<void> {
-    const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-    if (!perm.granted) return this.fail('Microphone or speech recognition was not allowed.');
-    this.subs.push(
-      ExpoSpeechRecognitionModule.addListener('result', (e: ExpoSpeechRecognitionResultEvent) => this.onResult(e)),
-      ExpoSpeechRecognitionModule.addListener('error', (e) => {
-        if (e.error === 'no-speech' || e.error === 'aborted') return;
-        this.fail(e.message || e.error);
-      }),
-      ExpoSpeechRecognitionModule.addListener('end', () => {
-        // The platform stops a session on its own (iOS after ~1 min); keep the line open.
-        this.listening = false;
-        if (!this.ended && !this.muted && !this.speaking && !this.awaitingReply) this.listen();
-      }),
-    );
-    this.listen();
-  }
-
-  end(): void {
-    this.ended = true;
-    this.stopListening();
-    void Speech.stop();
-    for (const s of this.subs) s.remove();
-    this.subs = [];
-    this.set({ phase: 'ended', heard: '' });
-  }
-
-  setMuted(muted: boolean): void {
-    this.muted = muted;
-    if (muted) {
-      this.stopListening();
-      this.set({ phase: 'muted', heard: '' });
-    } else if (!this.speaking && !this.awaitingReply) this.listen();
-  }
-
-  /** The user taps while the phone talks: stop reading and listen. */
-  interrupt(): void {
-    this.speakQueue = [];
-    this.skipReply = true;
-    void Speech.stop();
-    this.speaking = false;
-    this.awaitingReply = false;
-    if (!this.muted) this.listen();
-  }
-
-  /** The chat changed: `text` is the assistant's reply so far, `streaming` whether more is coming. */
-  onReply(text: string, streaming: boolean): void {
-    if (this.ended || this.skipReply) return;
-    const clean = speakable(text);
-    const pending = clean.slice(this.spokenUpTo);
-    const { done, rest } = completeSentences(pending);
-    let fresh: string[];
-    if (streaming) {
-      fresh = done;
-      this.spokenUpTo += pending.length - rest.length;
-    } else {
-      fresh = [...done, rest.trim()].filter(Boolean);
-      this.spokenUpTo = clean.length;
-    }
-    this.awaitingReply = streaming;
-    if (fresh.length) {
-      this.speakQueue.push(...fresh);
-      if (!this.speaking) this.speakNext();
-    } else if (!streaming && !this.speaking) this.replyFinished();
-  }
-
-  /** A new reply starts: forget what was spoken of the previous one. */
-  newReply(): void {
-    this.spokenUpTo = 0;
-    this.skipReply = false;
-  }
-
-  private listen(): void {
-    if (this.ended || this.listening || this.muted) return;
-    this.listening = true;
-    this.set({ phase: 'listening', heard: '' });
+    this.unsubscribe = this.deps.engine.subscribe((e) => this.onEngine(e));
+    this.note(`start ${this.deps.language}`);
     try {
-      ExpoSpeechRecognitionModule.start({
-        lang: this.deps.language,
-        interimResults: true,
-        continuous: true,
-        addsPunctuation: true,
-        iosTaskHint: 'dictation',
-        iosCategory: { category: 'playAndRecord', categoryOptions: ['defaultToSpeaker', 'allowBluetooth'], mode: 'voiceChat' },
+      const info = await this.deps.engine.start({
+        language: this.deps.language,
+        voice: this.deps.voice ?? null,
+        callerName: this.deps.callerName,
+        speaker: this.deps.speaker !== false,
+        useCallKit: this.deps.useCallKit !== false,
+        silenceMs: this.deps.silenceMs ?? SILENCE_MS,
+        holdWords: holdWords(this.lang),
+        contextualStrings: ['Claude', 'скриншот', 'буфер обмена', 'Mac', 'VS Code'],
       });
+      if (this.ended) return;
+      this.info = info;
+      this.note(`engine: echo cancellation ${info.echoCancellation}, CallKit ${info.callKit}, voice ${info.voiceName ?? '-'} (${info.voiceQuality ?? '-'})`);
+      this.snap = {
+        ...this.snap,
+        echoCancellation: info.echoCancellation,
+        callKit: info.callKit,
+        voiceName: info.voiceName,
+        voiceQuality: info.voiceQuality,
+        ...(info.voiceQuality === 'default' ? { notice: voiceHint(this.lang) } : {}),
+      };
+      this.sync();
     } catch (e) {
-      this.listening = false;
+      if (this.ended) return;
       this.fail(e instanceof Error ? e.message : String(e));
     }
   }
 
-  private stopListening(): void {
-    if (this.silenceTimer) clearTimeout(this.silenceTimer);
-    this.silenceTimer = null;
-    if (!this.listening) return;
-    this.listening = false;
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {}
+  end(): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.clearThinking();
+    this.deps.engine.end();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.note('end');
+    this.emit({ ...this.snap, phase: this.failed ? 'error' : 'ended', userSpeaking: false });
   }
 
-  private onResult(e: ExpoSpeechRecognitionResultEvent): void {
-    if (!this.listening || this.ended) return;
-    const heard = e.results[0]?.transcript?.trim() ?? '';
-    if (!heard) return;
-    this.set({ heard });
-    if (this.silenceTimer) clearTimeout(this.silenceTimer);
-    // iOS and Android both keep sending interim results; a pause with nothing new ends the utterance.
-    this.silenceTimer = setTimeout(() => this.commit(heard), e.isFinal ? 150 : (this.deps.silenceMs ?? SILENCE_MS));
+  setMuted(muted: boolean): void {
+    if (this.ended) return;
+    this.deps.engine.setMuted(muted);
+    // The engine confirms with a `muted` event; show the tap at once.
+    this.muted = muted;
+    this.sync();
   }
 
-  private commit(text: string): void {
-    this.silenceTimer = null;
-    this.stopListening();
-    this.spokenUpTo = 0;
-    this.awaitingReply = true;
-    if (!this.deps.send(text)) return this.fail('Not connected to the Mac.');
-    this.set({ phase: 'thinking', heard: text });
+  setSpeaker(on: boolean): void {
+    if (!this.ended) this.deps.engine.setSpeaker(on);
   }
 
-  private speakNext(): void {
-    const next = this.speakQueue.shift();
-    if (next === undefined) {
-      this.speaking = false;
-      if (!this.awaitingReply) this.replyFinished();
+  /** The user tapped while the phone talks: stop reading this reply and listen. */
+  interrupt(): void {
+    if (this.ended || !this.speakingNow()) return;
+    this.cutIn('');
+  }
+
+  /** Every update of this session's thread and state. */
+  onThread(items: readonly ChatItem[], sessionState: SessionState | undefined): void {
+    if (this.ended) return;
+    this.sessionState = sessionState;
+    if (items !== this.items) {
+      if (this.rebuilt(items)) {
+        // History was reloaded with fresh keys: what it holds counts as already read.
+        this.note(`thread reloaded (${items.length} items)`);
+        for (const item of items) if (item.type === 'assistant') this.spoken.set(item.key, Number.MAX_SAFE_INTEGER);
+        this.skipFrom = -1;
+      }
+      this.items = items;
+      this.read();
+    }
+    if (this.awaitingReply && this.turnFinished()) {
+      this.awaitingReply = false;
+      this.note('turn finished');
+    }
+    this.sync();
+  }
+
+  /** Pending permission prompts of this session. */
+  onPermissions(pending: readonly PermissionRequest[]): void {
+    if (this.ended) return;
+    if (this.confirming && !pending.some((p) => p.requestId === this.confirming!.requestId)) {
+      this.note('permission answered elsewhere');
+      this.confirming = null;
+    }
+    const next = pending.find((p) => !this.asked.has(p.requestId));
+    if (next && !this.confirming) {
+      this.asked.add(next.requestId);
+      this.confirming = { requestId: next.requestId, retries: 0 };
+      this.note(`permission ${next.tool}`);
+      this.say(permissionQuestion(next.tool, next.input, this.lang), true);
+    }
+    this.sync();
+  }
+
+  // -------------------------------------------------------------------------------------------------------------
+
+  private onEngine(e: EngineEvent): void {
+    if (this.ended) return;
+    switch (e.type) {
+      case 'state':
+        if (e.state === 'ended') {
+          this.note(`engine ended (${e.reason ?? ''})`);
+          this.snap = { ...this.snap, endedRemotely: e.reason !== 'local' };
+          this.end();
+          return;
+        }
+        this.held = e.state === 'held';
+        break;
+      case 'vad':
+        this.snap = { ...this.snap, userSpeaking: e.speaking };
+        // Echo or noise opened the recognizer while the phone talks and nothing came of it.
+        if (!e.speaking && this.mode === 'watch') this.deps.engine.cancelCapture();
+        break;
+      case 'partial':
+        this.onPartial(e.text);
+        break;
+      case 'final':
+        this.onUtterance(e.text);
+        break;
+      case 'speechStart':
+        this.started.add(e.id);
+        this.current = this.pending.get(e.id) ?? null;
+        if (this.current !== null) this.snap = { ...this.snap, said: this.current };
+        break;
+      case 'speechEnd':
+        this.pending.delete(e.id);
+        this.started.delete(e.id);
+        this.current = null;
+        break;
+      case 'speechIdle':
+        // Sentences already started are over; ones not started yet may still be on their way to the engine.
+        for (const id of this.started) this.pending.delete(id);
+        this.started.clear();
+        this.current = null;
+        break;
+      case 'muted':
+        this.muted = e.muted;
+        break;
+      case 'route':
+        this.snap = { ...this.snap, route: e.output };
+        break;
+      case 'recognitionError':
+        this.note(`recognition error ${e.code}: ${e.message}`);
+        break;
+      case 'error':
+        this.note(`error ${e.code}: ${e.message}`);
+        if (e.fatal) {
+          this.fail(e.message);
+          return;
+        }
+        this.snap = { ...this.snap, notice: e.message };
+        break;
+      case 'log':
+        this.note(e.message);
+        break;
+      case 'capture':
+        break;
+    }
+    this.sync();
+  }
+
+  private speakingNow(): boolean {
+    return this.current !== null || this.pending.size > 0;
+  }
+
+  private onPartial(text: string): void {
+    if (this.speakingNow()) {
+      const answering = this.confirming !== null && parseYesNo(text) !== null;
+      if (answering || (this.canBargeIn() && isBargeIn(text, this.current ?? ''))) this.cutIn(text);
       return;
     }
-    this.speaking = true;
-    this.stopListening();
-    this.set({ phase: 'speaking', said: next });
-    Speech.speak(next, {
-      language: this.deps.language,
-      rate: Platform.OS === 'ios' ? 0.52 : 1.0,
-      onDone: () => this.speakNext(),
-      onStopped: () => {
-        this.speaking = false;
-      },
-      onError: () => this.speakNext(),
-    });
+    this.snap = { ...this.snap, heard: text };
   }
 
-  private replyFinished(): void {
+  private onUtterance(raw: string): void {
+    const text = raw.trim();
+    if (!text) return;
+    if (this.speakingNow()) {
+      // Heard while the phone talks: the user cutting in, or what is left of the phone's own voice.
+      const answering = this.confirming !== null && parseYesNo(text) !== null;
+      if (!answering && !isStopRequest(text) && !(this.canBargeIn() && isBargeIn(text, this.current ?? ''))) {
+        this.note(`ignored while speaking: ${text}`);
+        return;
+      }
+      this.cutIn(text);
+    }
+    this.note(`heard: ${text}`);
+    this.snap = { ...this.snap, heard: text };
+    if (this.confirming) {
+      this.answerPermission(text);
+      return;
+    }
+    if (isStopRequest(text)) return;
+    if (!this.deps.send(text)) {
+      this.note('send failed: offline');
+      this.say(PHRASES[this.lang].offline, true);
+      return;
+    }
+    this.sentCount++;
+    this.awaitingReply = true;
+    this.spokenThisTurn = 0;
+    this.turnCapped = false;
+  }
+
+  /** Stops the reply being read; the rest of this turn stays in the chat. */
+  private cutIn(text: string): void {
+    this.note(`cut in${text ? `: ${text}` : ''}`);
+    this.skipFrom = this.items.length - 1;
+    // The user moved on: the rest of that turn is not waited for either.
     this.awaitingReply = false;
-    if (!this.ended && !this.muted) this.listen();
+    this.deps.engine.stopSpeaking();
+    this.pending.clear();
+    this.started.clear();
+    this.current = null;
+    this.snap = { ...this.snap, said: '', heard: text || this.snap.heard };
   }
 
-  private fail(error: string): void {
-    this.stopListening();
-    this.set({ phase: 'error', error });
+  private answerPermission(text: string): void {
+    const pending = this.confirming!;
+    const answer = parseYesNo(text);
+    const phrases = PHRASES[this.lang];
+    if (answer) {
+      this.confirming = null;
+      this.deps.respondPermission(pending.requestId, answer === 'yes' ? 'allow' : 'deny');
+      this.note(`permission ${answer}`);
+      this.say(answer === 'yes' ? phrases.allowed : phrases.denied, true);
+    } else if (pending.retries < 1) {
+      pending.retries++;
+      this.say(phrases.yesOrNo, true);
+    } else {
+      this.confirming = null;
+      this.say(phrases.onScreen, true);
+    }
   }
 
-  private set(patch: Partial<CallSnapshot>): void {
-    this.snapshot = { ...this.snapshot, ...patch };
-    this.deps.onChange(this.snapshot);
+  /** Where this call's conversation starts in the thread: at the first of our messages that came back. */
+  private convoStart(): number {
+    if (this.sentCount === 0) return this.items.length;
+    let need = this.sentCount;
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      if (this.items[i]!.type === 'user' && --need === 0) return i;
+    }
+    return this.items.length;
+  }
+
+  /** Queues what is new in the assistant's text. */
+  private read(): void {
+    let userAfterSkip = false;
+    for (let i = this.convoStart(); i < this.items.length; i++) {
+      const item = this.items[i]!;
+      if (item.type === 'user' && i > this.skipFrom) userAfterSkip = true;
+      if (item.type !== 'assistant') continue;
+      if (this.skipFrom >= 0 && (i <= this.skipFrom || !userAfterSkip)) {
+        this.spoken.set(item.key, Number.MAX_SAFE_INTEGER);
+        continue;
+      }
+      this.readItem(item);
+    }
+  }
+
+  private readItem(item: Extract<ChatItem, { type: 'assistant' }>): void {
+    const clean = speakable(item.text);
+    const done = this.spoken.get(item.key) ?? 0;
+    if (done >= clean.length) return;
+    const pending = clean.slice(done);
+    const { done: full, rest } = completeSentences(pending);
+    const fresh = item.streaming ? full : [...full, rest.trim()].filter(Boolean);
+    this.spoken.set(item.key, item.streaming ? done + pending.length - rest.length : clean.length);
+    for (const sentence of fresh) this.say(sentence, false);
+  }
+
+  private say(text: string, always: boolean): void {
+    let sentence = text;
+    if (!always) {
+      if (this.turnCapped) return;
+      if (this.spokenThisTurn + sentence.length > MAX_SPOKEN_PER_TURN) {
+        this.turnCapped = true;
+        sentence = PHRASES[this.lang].rest;
+      }
+      this.spokenThisTurn += sentence.length;
+    }
+    const id = `s${++this.seq}`;
+    this.pending.set(id, sentence);
+    this.deps.engine.speak(id, sentence);
+  }
+
+  /** Claude's turn after our last message is over: a result or an error follows it, or the session went idle. */
+  private turnFinished(): boolean {
+    const start = this.convoStart();
+    if (start >= this.items.length) return false;
+    for (let i = this.items.length - 1; i >= start; i--) {
+      const type = this.items[i]!.type;
+      if (type === 'result' || type === 'error') return true;
+      if (type === 'user') break;
+    }
+    const last = this.items[this.items.length - 1]!;
+    return this.sessionState === 'idle' && last.type !== 'user' && !(last.type === 'assistant' && last.streaming);
+  }
+
+  /** The thread was replaced (history loaded again) rather than appended to. */
+  private rebuilt(items: readonly ChatItem[]): boolean {
+    const prev = this.items;
+    if (prev.length === 0) return false;
+    return items.length < prev.length || items[0]?.key !== prev[0]?.key;
+  }
+
+  private canBargeIn(): boolean {
+    return this.info?.echoCancellation === true && this.deps.bargeIn !== false;
+  }
+
+  private phase(): CallPhase {
+    if (this.failed) return 'error';
+    if (this.ended) return 'ended';
+    if (!this.info) return 'starting';
+    if (this.held) return 'held';
+    if (this.muted) return 'muted';
+    if (this.speakingNow()) return 'speaking';
+    if (this.confirming) return 'confirming';
+    if (this.awaitingReply) return 'thinking';
+    return 'listening';
+  }
+
+  private sync(): void {
+    if (this.ended) return;
+    const phase = this.phase();
+    let mode: CaptureMode = 'listen';
+    if (!this.info || this.held || this.muted) mode = 'off';
+    else if (phase === 'speaking') mode = this.canBargeIn() ? 'watch' : 'off';
+    if (mode !== this.mode) {
+      this.mode = mode;
+      this.deps.engine.setMode(mode);
+    }
+    if (phase === 'thinking') {
+      if (!this.thinkingSound && !this.thinkingTimer) {
+        this.thinkingTimer = setTimeout(() => {
+          this.thinkingTimer = null;
+          if (this.ended || this.phase() !== 'thinking') return;
+          this.thinkingSound = true;
+          this.deps.engine.setThinking(true);
+        }, THINKING_SOUND_AFTER_MS);
+      }
+    } else {
+      this.clearThinking();
+    }
+    this.emit({ ...this.snap, phase });
+  }
+
+  private clearThinking(): void {
+    if (this.thinkingTimer) clearTimeout(this.thinkingTimer);
+    this.thinkingTimer = null;
+    if (this.thinkingSound) {
+      this.thinkingSound = false;
+      this.deps.engine.setThinking(false);
+    }
+  }
+
+  private fail(message: string): void {
+    this.note(`failed: ${message}`);
+    this.failed = true;
+    this.snap = { ...this.snap, error: message };
+    this.end();
+  }
+
+  private emit(next: CallSnapshot): void {
+    this.snap = next;
+    const prev = this.lastSent;
+    if (prev && SNAPSHOT_KEYS.every((key) => prev[key] === next[key])) return;
+    this.lastSent = next;
+    this.deps.onChange(next);
+  }
+
+  private note(line: string): void {
+    this.logLines.push(`${new Date().toISOString().slice(11, 23)} ${line}`);
+    if (this.logLines.length > LOG_LINES) this.logLines.shift();
   }
 }
 
-/** ru for Russian phones, otherwise the device language; both the recognizer and the voice follow it. */
-export function callLanguage(locale: string | undefined): string {
-  if (!locale) return 'en-US';
-  if (/^ru/i.test(locale)) return 'ru-RU';
-  return locale.includes('-') ? locale : `${locale}-${locale.toUpperCase()}`;
+const SNAPSHOT_KEYS: (keyof CallSnapshot)[] = [
+  'phase',
+  'heard',
+  'said',
+  'userSpeaking',
+  'error',
+  'notice',
+  'echoCancellation',
+  'callKit',
+  'voiceName',
+  'voiceQuality',
+  'route',
+  'endedRemotely',
+];
+
+function voiceHint(lang: CallLang): string {
+  return lang === 'ru'
+    ? 'A better Russian voice: iPhone Settings → Accessibility → Spoken Content → Voices → Russian → Milena or Yuri (Enhanced), then pick it in Pocket settings.'
+    : 'A better voice: iPhone Settings → Accessibility → Spoken Content → Voices, download an Enhanced or Premium voice, then pick it in Pocket settings.';
 }

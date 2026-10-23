@@ -13,4 +13,10 @@ describe('app.json', () => {
     }
     expect(config.ios.infoPlist.NSMicrophoneUsageDescription).toBeTruthy();
   });
+
+  it('keeps calls alive with the screen locked', () => {
+    // audio: the call's audio keeps running in the background; voip: CallKit calls.
+    expect(config.ios.infoPlist.UIBackgroundModes).toEqual(expect.arrayContaining(['audio', 'voip']));
+    expect(config.ios.infoPlist.NSSpeechRecognitionUsageDescription).toBeTruthy();
+  });
 });

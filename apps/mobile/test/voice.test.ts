@@ -1,12 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('expo-speech', () => ({ speak: vi.fn(), stop: vi.fn(async () => {}) }));
-vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: { start: vi.fn(), stop: vi.fn(), abort: vi.fn(), addListener: vi.fn(() => ({ remove: () => {} })), requestPermissionsAsync: vi.fn(async () => ({ granted: true })) } }));
-vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
-
-const { callLanguage, completeSentences, speakable, VoiceCall } = await import('../src/voice');
-const Speech = await import('expo-speech');
-const { ExpoSpeechRecognitionModule } = await import('expo-speech-recognition');
+import type { ChatItem, PermissionRequest } from '@pocket/client-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  callLanguage,
+  completeSentences,
+  endpointDelay,
+  holdWords,
+  isBargeIn,
+  isStopRequest,
+  parseYesNo,
+  permissionQuestion,
+  resolveCallLanguage,
+  speakable,
+  VoiceCall,
+  type CallSnapshot,
+  type CaptureMode,
+  type EngineEvent,
+  type EngineInfo,
+  type EngineStartOptions,
+  type SpeechEngine,
+} from '../src/voice';
 
 describe('voice helpers', () => {
   it('strips markdown and code from what is read aloud', () => {
@@ -19,59 +31,327 @@ describe('voice helpers', () => {
     expect(completeSentences('no end yet')).toEqual({ done: [], rest: 'no end yet' });
   });
 
-  it('picks the call language from the phone', () => {
+  it('picks a recognizer language with a region', () => {
     expect(callLanguage('ru-RU')).toBe('ru-RU');
     expect(callLanguage('ru')).toBe('ru-RU');
+    expect(callLanguage('ru_KZ')).toBe('ru-RU');
     expect(callLanguage('en-GB')).toBe('en-GB');
+    expect(callLanguage('en')).toBe('en-US');
+    expect(callLanguage('uk')).toBe('uk-UA');
+    expect(callLanguage('zh-Hans-CN')).toBe('zh-CN');
     expect(callLanguage(undefined)).toBe('en-US');
+    expect(resolveCallLanguage('auto', ['ru-US', 'en-US'])).toBe('ru-RU');
+    expect(resolveCallLanguage('en-US', ['ru-RU'])).toBe('en-US');
+  });
+
+  it('waits longer after "и" and less after a full stop before ending an utterance', () => {
+    const hold = holdWords('ru');
+    expect(endpointDelay('открой браузер', 1100, hold)).toBe(1100);
+    expect(endpointDelay('открой браузер.', 1100, hold)).toBe(700);
+    expect(endpointDelay('открой браузер и', 1100, hold)).toBe(1800);
+    expect(endpointDelay('Сделай так, чтобы', 1100, hold)).toBe(1800);
+  });
+
+  it('tells the user cutting in from the phone hearing itself', () => {
+    expect(isBargeIn('вижу терминал', 'Я вижу терминал с ошибкой.')).toBe(false);
+    expect(isBargeIn('нет открой браузер', 'Я вижу терминал с ошибкой.')).toBe(true);
+    expect(isBargeIn('стоп', 'Я вижу терминал с ошибкой.')).toBe(true);
+    expect(isBargeIn('ага', 'Я вижу терминал с ошибкой.')).toBe(false);
+    expect(isStopRequest('Стоп!')).toBe(true);
+    expect(isStopRequest('стоп, открой браузер')).toBe(false);
+  });
+
+  it('understands yes and no', () => {
+    expect(parseYesNo('Да, давай')).toBe('yes');
+    expect(parseYesNo('конечно')).toBe('yes');
+    expect(parseYesNo('нет')).toBe('no');
+    expect(parseYesNo('не надо')).toBe('no');
+    expect(parseYesNo("don't do it")).toBe('no');
+    expect(parseYesNo('а что это')).toBe(null);
+  });
+
+  it('asks for a permission in words', () => {
+    expect(permissionQuestion('Bash', { command: 'npm test' }, 'ru')).toBe('Нужно разрешение: Bash, npm test. Разрешить?');
+    expect(permissionQuestion('mcp__pocket__pc_clipboard_write', {}, 'en')).toBe('Claude needs permission: pc clipboard write. Allow it?');
   });
 });
 
-describe('VoiceCall', () => {
-  it('sends an utterance after a pause, speaks the streamed reply sentence by sentence, then listens again', async () => {
-    vi.useFakeTimers();
-    try {
-      const sent: string[] = [];
-      const phases: string[] = [];
-      const listeners: Record<string, (e: unknown) => void> = {};
-      vi.mocked(ExpoSpeechRecognitionModule.addListener).mockImplementation(((name: string, fn: (e: unknown) => void) => {
-        listeners[name] = fn;
-        return { remove: () => {} };
-      }) as never);
-      const call = new VoiceCall({ send: (t) => (sent.push(t), true), onChange: (s) => phases.push(s.phase), language: 'ru-RU', silenceMs: 500 });
-      await call.start();
-      expect(ExpoSpeechRecognitionModule.start).toHaveBeenCalledWith(expect.objectContaining({ lang: 'ru-RU', continuous: true }));
-      expect(phases.at(-1)).toBe('listening');
+/** Records what the call asks of the engine and lets a test play the engine's side. */
+class FakeEngine implements SpeechEngine {
+  info: EngineInfo = { echoCancellation: true, callKit: true, voiceName: 'Milena', voiceQuality: 'enhanced' };
+  options: EngineStartOptions | null = null;
+  modes: CaptureMode[] = [];
+  queue: { id: string; text: string }[] = [];
+  texts: string[] = [];
+  thinking: boolean[] = [];
+  muted: boolean[] = [];
+  stopped = 0;
+  cancelled = 0;
+  ended = false;
+  private readonly listeners = new Set<(e: EngineEvent) => void>();
 
-      listeners.result!({ isFinal: false, results: [{ transcript: 'сделай' }] });
-      listeners.result!({ isFinal: false, results: [{ transcript: 'сделай скриншот' }] });
-      vi.advanceTimersByTime(499);
-      expect(sent).toEqual([]);
-      vi.advanceTimersByTime(1);
-      expect(sent).toEqual(['сделай скриншот']);
-      expect(phases.at(-1)).toBe('thinking');
-      expect(ExpoSpeechRecognitionModule.abort).toHaveBeenCalled();
+  async start(options: EngineStartOptions): Promise<EngineInfo> {
+    this.options = options;
+    return this.info;
+  }
+  end(): void {
+    this.ended = true;
+  }
+  setMode(mode: CaptureMode): void {
+    this.modes.push(mode);
+  }
+  cancelCapture(): void {
+    this.cancelled++;
+  }
+  speak(id: string, text: string): void {
+    this.queue.push({ id, text });
+    this.texts.push(text);
+  }
+  stopSpeaking(): void {
+    this.stopped++;
+    this.queue = [];
+  }
+  setThinking(on: boolean): void {
+    this.thinking.push(on);
+  }
+  setMuted(muted: boolean): void {
+    this.muted.push(muted);
+  }
+  setSpeaker(): void {}
+  subscribe(listener: (e: EngineEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
 
-      call.newReply();
-      call.onReply('Готово. Я вижу', true);
-      expect(vi.mocked(Speech.speak).mock.calls.map((c) => c[0])).toEqual(['Готово.']);
-      expect(phases.at(-1)).toBe('speaking');
-      call.onReply('Готово. Я вижу терминал с ошибкой', true);
-      call.onReply('Готово. Я вижу терминал с ошибкой.', false);
-      // The first sentence is still being spoken; the rest is queued and read when it ends.
-      const first = vi.mocked(Speech.speak).mock.calls[0]![1] as { onDone: () => void };
-      first.onDone();
-      expect(vi.mocked(Speech.speak).mock.calls.map((c) => c[0])).toEqual(['Готово.', 'Я вижу терминал с ошибкой.']);
-      const second = vi.mocked(Speech.speak).mock.calls[1]![1] as { onDone: () => void };
-      vi.mocked(ExpoSpeechRecognitionModule.start).mockClear();
-      second.onDone();
-      expect(phases.at(-1)).toBe('listening');
-      expect(ExpoSpeechRecognitionModule.start).toHaveBeenCalledTimes(1);
-
-      call.end();
-      expect(phases.at(-1)).toBe('ended');
-    } finally {
-      vi.useRealTimers();
+  get mode(): CaptureMode | undefined {
+    return this.modes.at(-1);
+  }
+  emit(event: EngineEvent): void {
+    for (const listener of [...this.listeners]) listener(event);
+  }
+  /** Starts the first queued sentence. */
+  begin(): void {
+    const first = this.queue[0];
+    if (first) this.emit({ type: 'speechStart', id: first.id });
+  }
+  /** Reads everything queued to the end. */
+  finishSpeaking(): void {
+    for (const s of this.queue.splice(0)) {
+      this.emit({ type: 'speechStart', id: s.id });
+      this.emit({ type: 'speechEnd', id: s.id, interrupted: false });
     }
+    this.emit({ type: 'speechIdle' });
+  }
+}
+
+let n = 0;
+const user = (text: string): ChatItem => ({ type: 'user', key: `u${++n}`, text, from: 'phone', voice: true });
+const reply = (key: string, text: string, streaming = false): ChatItem => ({ type: 'assistant', key, text, streaming });
+const result = (): ChatItem => ({ type: 'result', key: `r${++n}` });
+const tool = (): ChatItem => ({ type: 'tool', key: `t${++n}`, id: `t${n}`, name: 'mcp__pocket__pc_screenshot', input: {}, output: '' });
+
+function setup(initialThread: ChatItem[] = [], info?: Partial<EngineInfo>) {
+  const engine = new FakeEngine();
+  Object.assign(engine.info, info);
+  const sent: string[] = [];
+  const decisions: [string, string][] = [];
+  const snaps: CallSnapshot[] = [];
+  let online = true;
+  const call = new VoiceCall({
+    engine,
+    send: (text) => {
+      if (!online) return false;
+      sent.push(text);
+      return true;
+    },
+    respondPermission: (requestId, decision) => (decisions.push([requestId, decision]), true),
+    onChange: (s) => snaps.push(s),
+    language: 'ru-RU',
+    callerName: 'Lipton',
+    initialThread,
+  });
+  return { engine, call, sent, decisions, snaps, setOnline: (v: boolean) => (online = v) };
+}
+
+describe('VoiceCall', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('never reads what was in the chat before, reads the reply as it streams and listens again only when the turn ends', async () => {
+    const history = [user('старое'), reply('old', 'Старый ответ.')];
+    const { engine, call, sent } = setup(history);
+    await call.start();
+    expect(engine.options).toMatchObject({ language: 'ru-RU', callerName: 'Lipton', useCallKit: true });
+    expect(engine.mode).toBe('listen');
+    expect(call.snapshot().phase).toBe('listening');
+
+    engine.emit({ type: 'partial', text: 'сделай' });
+    expect(call.snapshot().heard).toBe('сделай');
+    engine.emit({ type: 'final', text: 'сделай скриншот' });
+    expect(sent).toEqual(['сделай скриншот']);
+    expect(call.snapshot().phase).toBe('thinking');
+    vi.advanceTimersByTime(1000);
+    expect(engine.thinking).toEqual([true]);
+
+    const asked = user('сделай скриншот');
+    call.onThread([...history, asked, reply('a1', 'Сейчас посмотрю. Делаю', true)], 'running');
+    expect(engine.texts).toEqual(['Сейчас посмотрю.']);
+    expect(engine.thinking).toEqual([true, false]);
+    engine.begin();
+    expect(call.snapshot()).toMatchObject({ phase: 'speaking', said: 'Сейчас посмотрю.' });
+    // Echo cancellation: the user may talk over the phone.
+    expect(engine.mode).toBe('watch');
+
+    const step = [...history, asked, reply('a1', 'Сейчас посмотрю. Делаю скриншот.'), tool()];
+    call.onThread(step, 'running');
+    expect(engine.texts).toEqual(['Сейчас посмотрю.', 'Делаю скриншот.']);
+    engine.finishSpeaking();
+    // A tool runs: still Claude's turn, so no listening for a new question yet.
+    expect(call.snapshot().phase).toBe('thinking');
+
+    call.onThread([...step, reply('a2', 'Вижу терминал с ошибкой.'), result()], 'idle');
+    expect(engine.texts.at(-1)).toBe('Вижу терминал с ошибкой.');
+    engine.finishSpeaking();
+    expect(call.snapshot().phase).toBe('listening');
+    expect(engine.mode).toBe('listen');
+    expect(engine.texts).not.toContain('Старый ответ.');
+  });
+
+  it('stops talking when the user cuts in, skips the rest of that reply and answers the new question', async () => {
+    const { engine, call, sent } = setup();
+    await call.start();
+    engine.emit({ type: 'final', text: 'расскажи про проект' });
+    const first = user('расскажи про проект');
+    call.onThread([first, reply('a1', 'Первое предложение. Второе предложение. Третье', true)], 'running');
+    engine.begin();
+    expect(call.snapshot().phase).toBe('speaking');
+
+    // The phone hearing itself through the echo canceller is not a question.
+    engine.emit({ type: 'partial', text: 'первое предложение' });
+    expect(engine.stopped).toBe(0);
+    engine.emit({ type: 'vad', speaking: false });
+    expect(engine.cancelled).toBe(1);
+
+    engine.emit({ type: 'partial', text: 'подожди открой браузер' });
+    expect(engine.stopped).toBe(1);
+    expect(call.snapshot().phase).toBe('listening');
+    expect(engine.mode).toBe('listen');
+
+    // More of the old reply streams in: not read.
+    const old = reply('a1', 'Первое предложение. Второе предложение. Третье предложение. Четвёртое.', false);
+    call.onThread([first, old, result()], 'idle');
+    expect(engine.texts).toEqual(['Первое предложение.', 'Второе предложение.']);
+
+    engine.emit({ type: 'final', text: 'подожди открой браузер' });
+    expect(sent).toEqual(['расскажи про проект', 'подожди открой браузер']);
+    call.onThread([first, old, result(), user('подожди открой браузер'), reply('a2', 'Открыл.'), result()], 'idle');
+    expect(engine.texts.at(-1)).toBe('Открыл.');
+  });
+
+  it('treats a bare "стоп" as "be quiet", not as a message', async () => {
+    const { engine, call, sent } = setup();
+    await call.start();
+    engine.emit({ type: 'final', text: 'привет' });
+    call.onThread([user('привет'), reply('a1', 'Привет! Чем помочь?', true)], 'running');
+    engine.begin();
+    engine.emit({ type: 'final', text: 'Стоп' });
+    expect(engine.stopped).toBe(1);
+    expect(sent).toEqual(['привет']);
+  });
+
+  it('asks for a permission aloud and answers it with the user\'s "да"', async () => {
+    const { engine, call, decisions } = setup();
+    await call.start();
+    const request: PermissionRequest = { requestId: 'p1', sessionId: 's1', tool: 'Bash', input: { command: 'npm test' }, expiresAt: 0 };
+    call.onPermissions([request]);
+    expect(engine.texts).toEqual(['Нужно разрешение: Bash, npm test. Разрешить?']);
+    engine.finishSpeaking();
+    expect(call.snapshot().phase).toBe('confirming');
+    expect(engine.mode).toBe('listen');
+
+    engine.emit({ type: 'final', text: 'а это что' });
+    expect(engine.texts.at(-1)).toBe('Скажите «да» или «нет».');
+    engine.finishSpeaking();
+    engine.emit({ type: 'final', text: 'Да, давай' });
+    expect(decisions).toEqual([['p1', 'allow']]);
+    expect(engine.texts.at(-1)).toBe('Разрешил.');
+    // The same prompt is not asked twice.
+    call.onPermissions([request]);
+    expect(engine.texts.filter((t) => t.startsWith('Нужно разрешение'))).toHaveLength(1);
+  });
+
+  it('does not read the history when it loads after the call started, nor again when it reloads', async () => {
+    const { engine, call } = setup([]);
+    await call.start();
+    engine.emit({ type: 'final', text: 'что нового' });
+    const loaded = [user('давно'), reply('h1', 'Давний ответ.'), result(), user('что нового'), reply('a1', 'Всё работает.'), result()];
+    call.onThread(loaded, 'idle');
+    expect(engine.texts).toEqual(['Всё работает.']);
+    engine.finishSpeaking();
+    // Reconnect: the same history with new keys.
+    call.onThread(
+      loaded.map((item) => ({ ...item, key: `${item.key}-again` })),
+      'idle',
+    );
+    expect(engine.texts).toEqual(['Всё работает.']);
+  });
+
+  it('cuts a very long reply short and points to the chat', async () => {
+    const { engine, call } = setup();
+    await call.start();
+    engine.emit({ type: 'final', text: 'расскажи всё' });
+    const sentence = `${'Очень длинное предложение про проект '.repeat(5).trim()}.`;
+    call.onThread([user('расскажи всё'), reply('a1', Array.from({ length: 12 }, () => sentence).join(' ')), result()], 'idle');
+    expect(engine.texts.at(-1)).toBe('Остальное — в чате.');
+    expect(engine.texts.join(' ').length).toBeLessThan(1400);
+  });
+
+  it('says the Mac is offline instead of losing the question', async () => {
+    const { engine, call, setOnline } = setup();
+    await call.start();
+    setOnline(false);
+    engine.emit({ type: 'final', text: 'привет' });
+    expect(engine.texts).toEqual(['Нет связи с Маком.']);
+    engine.finishSpeaking();
+    expect(call.snapshot().phase).toBe('listening');
+  });
+
+  it('follows mute and hang-up from the lock screen', async () => {
+    const { engine, call } = setup();
+    await call.start();
+    engine.emit({ type: 'muted', muted: true });
+    expect(call.snapshot().phase).toBe('muted');
+    expect(engine.mode).toBe('off');
+    engine.emit({ type: 'muted', muted: false });
+    expect(engine.mode).toBe('listen');
+    engine.emit({ type: 'state', state: 'held' });
+    expect(call.snapshot().phase).toBe('held');
+    engine.emit({ type: 'state', state: 'active' });
+    engine.emit({ type: 'state', state: 'ended', reason: 'remote' });
+    expect(call.snapshot()).toMatchObject({ phase: 'ended', endedRemotely: true });
+    expect(engine.ended).toBe(true);
+  });
+
+  it('keeps the microphone off while talking when the engine cannot cancel echo', async () => {
+    const { engine, call } = setup([], { echoCancellation: false, voiceQuality: 'default' });
+    await call.start();
+    expect(call.snapshot().notice).toContain('Spoken Content');
+    engine.emit({ type: 'final', text: 'привет' });
+    call.onThread([user('привет'), reply('a1', 'Привет.'), result()], 'idle');
+    expect(engine.mode).toBe('off');
+    engine.emit({ type: 'partial', text: 'совсем другое что-то' });
+    expect(engine.stopped).toBe(0);
+    engine.finishSpeaking();
+    expect(engine.mode).toBe('listen');
+  });
+
+  it('shows why a call could not start', async () => {
+    const { engine, call } = setup();
+    engine.start = async () => {
+      throw new Error('Microphone access is off');
+    };
+    await call.start();
+    expect(call.snapshot()).toMatchObject({ phase: 'error', error: 'Microphone access is off' });
+    expect(engine.ended).toBe(true);
   });
 });

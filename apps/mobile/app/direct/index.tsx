@@ -12,7 +12,7 @@ import { makeConversations, makeNotes, OWN, type FakeConversation } from '../../
 import { connectionBanner, isActiveNow } from '../../src/direct';
 import { personaFor } from '../../src/persona';
 import { relativeTime } from '../../src/format';
-import { useChatState, useSession } from '../../src/session';
+import { useChatSelector, useSession } from '../../src/session';
 import { useLastOpened } from '../../src/state/unread';
 import { colors } from '../../src/theme';
 
@@ -103,7 +103,10 @@ export default function DirectInbox() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { client } = useSession();
-  const state = useChatState();
+  const sessions = useChatSelector((s) => s.sessions);
+  const host = useChatSelector((s) => s.host);
+  const computers = useChatSelector((s) => s.computers);
+  const lastError = useChatSelector((s) => s.lastError);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -137,7 +140,7 @@ export default function DirectInbox() {
 
   const q = query.trim().toLowerCase();
   const rows = useMemo<Row[]>(() => {
-    const matching = state.sessions.filter((s) => !q || personaFor(s.sessionId).username.includes(q) || s.title.toLowerCase().includes(q) || (s.lastText ?? '').toLowerCase().includes(q));
+    const matching = sessions.filter((s) => !q || personaFor(s.sessionId).username.includes(q) || s.title.toLowerCase().includes(q) || (s.lastText ?? '').toLowerCase().includes(q));
     const hidden = matching.filter((s) => s.hidden);
     const claude: Row[] = [
       ...matching.filter((s) => !s.hidden).map((session): Row => ({ kind: 'claude', session })),
@@ -148,7 +151,7 @@ export default function DirectInbox() {
       .filter((c) => !q || c.name.toLowerCase().includes(q) || c.person.username.includes(q))
       .map((conversation) => ({ kind: 'fake', conversation }));
     return [...claude, ...fake];
-  }, [state.sessions, fakes, q, showHidden]);
+  }, [sessions, fakes, q, showHidden]);
 
   const manage = useCallback(
     (session: SessionMeta) => {
@@ -167,8 +170,8 @@ export default function DirectInbox() {
     [client],
   );
 
-  const banner = connectionBanner(state);
-  const active = isActiveNow(state);
+  const banner = useChatSelector(connectionBanner);
+  const active = useChatSelector(isActiveNow);
 
   const header = (
     <View>
@@ -191,8 +194,8 @@ export default function DirectInbox() {
         <Text style={styles.section}>Messages</Text>
         <Text style={styles.requests}>Requests</Text>
       </View>
-      {state.host && !state.host.ready && state.host.reason ? <Text style={styles.notice}>{state.host.reason}</Text> : null}
-      {state.host?.user && !state.host.user.owner && state.computers.length === 0 ? (
+      {host && !host.ready && host.reason ? <Text style={styles.notice}>{host.reason}</Text> : null}
+      {host?.user && !host.user.owner && computers.length === 0 ? (
         <Pressable onPress={() => router.push('/direct/computers')} style={styles.setupCard}>
           <Ionicons name="laptop-outline" size={22} color={colors.accent} />
           <View style={{ flex: 1 }}>
@@ -202,9 +205,9 @@ export default function DirectInbox() {
           <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
         </Pressable>
       ) : null}
-      {state.lastError ? (
+      {lastError ? (
         <Pressable onPress={() => client?.clearError()}>
-          <Text style={[styles.notice, { color: colors.danger }]}>{state.lastError}</Text>
+          <Text style={[styles.notice, { color: colors.danger }]}>{lastError}</Text>
         </Pressable>
       ) : null}
     </View>

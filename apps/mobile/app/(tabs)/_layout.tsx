@@ -28,6 +28,7 @@ export default function TabsLayout() {
         },
         tabBarItemStyle: { paddingVertical: 0, justifyContent: 'center' },
         sceneStyle: { backgroundColor: colors.bg },
+        freezeOnBlur: true,
       }}
     >
       <Tabs.Screen

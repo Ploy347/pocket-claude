@@ -16,7 +16,7 @@ import { TypingBubble } from '../../src/components/TypingBubble';
 import { makeConversations, type FakeConversation } from '../../src/content/fake';
 import { isActiveNow } from '../../src/direct';
 import { personaFor } from '../../src/persona';
-import { useChatState, useSession } from '../../src/session';
+import { useChatSelector, useSession } from '../../src/session';
 import { markOpened } from '../../src/state/unread';
 import { colors, ownBubble, radius } from '../../src/theme';
 
@@ -85,13 +85,18 @@ function ClaudeThread({ id }: { id: string }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { client } = useSession();
-  const state = useChatState();
+  // Field by field: a chat must not re-render for every word streamed into another chat.
+  const session = useChatSelector((s) => s.sessions.find((x) => x.sessionId === id));
+  const thread = useChatSelector((s) => s.threads[id]) ?? EMPTY;
+  const loaded = useChatSelector((s) => s.loaded[id] === true);
+  const allPermissions = useChatSelector((s) => s.permissions);
+  const connection = useChatSelector((s) => s.connection);
+  const brainOnline = useChatSelector((s) => s.brainOnline);
+  const models = useChatSelector((s) => s.models);
+  const computers = useChatSelector((s) => s.computers);
   const keyboardVisible = useKeyboardVisible();
 
-  const session = state.sessions.find((s) => s.sessionId === id);
-  const thread = state.threads[id] ?? EMPTY;
-  const loaded = state.loaded[id] === true;
-  const permissions = useMemo(() => state.permissions.filter((p) => p.sessionId === id), [state.permissions, id]);
+  const permissions = useMemo(() => allPermissions.filter((p) => p.sessionId === id), [allPermissions, id]);
   const persona = useMemo(() => personaFor(id), [id]);
   const data = useMemo(() => [...thread].reverse(), [thread]);
   const running = session?.state === 'running' || session?.state === 'waiting_permission';
@@ -107,12 +112,12 @@ function ClaudeThread({ id }: { id: string }) {
   }, [id, updatedAt]);
 
   useEffect(() => {
-    if (client && !loaded && state.connection === 'online') client.loadHistory(id);
-  }, [client, id, loaded, state.connection]);
+    if (client && !loaded && connection === 'online') client.loadHistory(id);
+  }, [client, id, loaded, connection]);
 
   useEffect(() => {
-    if (client && state.connection === 'online' && state.brainOnline && state.models.length === 0) client.loadModels();
-  }, [client, state.connection, state.brainOnline, state.models.length]);
+    if (client && connection === 'online' && brainOnline && models.length === 0) client.loadModels();
+  }, [client, connection, brainOnline, models.length]);
 
   const actions = useMemo<ComposerActions>(
     () => ({
@@ -141,10 +146,10 @@ function ClaudeThread({ id }: { id: string }) {
   const last = thread[thread.length - 1];
   const working = session?.state === 'running' && !(last?.type === 'assistant' && last.streaming);
   const computer = useMemo(
-    () => state.computers.find((c) => c.deviceId === session?.executorId && (!c.capabilities || c.capabilities.includes('tools'))),
-    [session?.executorId, state.computers],
+    () => computers.find((c) => c.deviceId === session?.executorId && (!c.capabilities || c.capabilities.includes('tools'))),
+    [session?.executorId, computers],
   );
-  const macOnline = state.connection === 'online' && state.brainOnline;
+  const macOnline = connection === 'online' && brainOnline;
   const projectName = session?.project?.split(/[\\/]/).filter(Boolean).pop();
   const active = macOnline && (computer ? computer.online : true);
   const status = !session
@@ -202,7 +207,7 @@ function ClaudeThread({ id }: { id: string }) {
         {permissions.map((p) => (
           <PermissionCard key={p.requestId} request={p} onRespond={respond} />
         ))}
-        <ClaudeComposer running={running} session={session} models={state.models} actions={actions} />
+        <ClaudeComposer running={running} session={session} models={models} actions={actions} />
       </View>
     </KeyboardAvoidingView>
   );

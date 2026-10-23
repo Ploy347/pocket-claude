@@ -4,7 +4,7 @@ import * as Haptics from './haptics';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useChatState, useSession } from './session';
+import { useChatSelector, useSession } from './session';
 import { colors } from './theme';
 
 interface PcClipboard {
@@ -19,14 +19,15 @@ const Ctx = createContext<PcClipboard | null>(null);
 export function PcClipboardProvider({ children }: { children: ReactNode }) {
   const insets = useSafeAreaInsets();
   const { client } = useSession();
-  const state = useChatState();
+  const computers = useChatSelector((s) => s.computers);
+  const activeComputer = useChatSelector((s) => s.activeComputer);
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const target = useMemo(() => {
-    const list = state.computers.filter((c) => c.capabilities?.includes('clipboard'));
-    return list.find((c) => c.deviceId === state.activeComputer && c.online) ?? list.find((c) => c.online) ?? list[0];
-  }, [state.computers, state.activeComputer]);
+    const list = computers.filter((c) => c.capabilities?.includes('clipboard'));
+    return list.find((c) => c.deviceId === activeComputer && c.online) ?? list.find((c) => c.online) ?? list[0];
+  }, [computers, activeComputer]);
 
   const show = useCallback((text: string, error = false) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);

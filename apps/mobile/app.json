@@ -51,7 +51,8 @@
       "appleTeamId": "4D42LWMN69",
       "infoPlist": {
         "UIBackgroundModes": [
-          "audio"
+          "audio",
+          "voip"
         ],
         "NSMicrophoneUsageDescription": "Pocket uses the microphone for voice calls with the assistant.",
         "NSSpeechRecognitionUsageDescription": "Pocket turns what you say on a call into text for the assistant."
