@@ -1,0 +1,7 @@
+{
+  "name": "pocket-call",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hands-free voice calls for Pocket on iOS: CallKit, echo-cancelled audio, speech recognition and synthesis",
+  "main": "index.ts"
+}
