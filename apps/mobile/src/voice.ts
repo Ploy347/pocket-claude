@@ -39,7 +39,8 @@ export function words(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .split(/[\s.,!?;:…"'«»„“”()[\]{}<>/\\|*_~`#+=@%^&$—–-]+/)
+    .replace(/’/g, "'")
+    .split(/[\s.,!?;:…"«»„“”()[\]{}<>/\\|*_~`#+=@%^&$—–-]+/)
     .filter(Boolean);
 }
 
@@ -559,6 +560,8 @@ export class VoiceCall {
   private cutIn(text: string): void {
     this.note(`cut in${text ? `: ${text}` : ''}`);
     this.skipFrom = this.items.length - 1;
+    // The user moved on: the rest of that turn is not waited for either.
+    this.awaitingReply = false;
     this.deps.engine.stopSpeaking();
     this.pending.clear();
     this.started.clear();
