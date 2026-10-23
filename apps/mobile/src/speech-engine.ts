@@ -83,6 +83,11 @@ export class JsSpeechEngine implements SpeechEngine {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private muted = false;
   private ended = false;
+  /** Sessions that ended right after starting in a row; restarting them at once spins the CPU. */
+  private quickEnds = 0;
+  private startedAt = 0;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastError: string | null = null;
   private queue: { id: string; text: string }[] = [];
   private speaking: string | null = null;
 
@@ -94,13 +99,30 @@ export class JsSpeechEngine implements SpeechEngine {
       ExpoSpeechRecognitionModule.addListener('result', (e: ExpoSpeechRecognitionResultEvent) => this.onResult(e)),
       ExpoSpeechRecognitionModule.addListener('error', (e) => {
         if (e.error === 'no-speech' || e.error === 'aborted') return;
-        this.emit({ type: 'recognitionError', code: e.error, message: e.message || e.error });
+        this.lastError = e.message || e.error;
+        if (this.quickEnds === 0) this.emit({ type: 'recognitionError', code: e.error, message: e.message || e.error });
       }),
       ExpoSpeechRecognitionModule.addListener('end', () => {
-        // The platform ends sessions on its own (iOS after about a minute): keep listening.
+        // The platform ends sessions on its own (iOS after about a minute): keep listening. A session that ends
+        // right away means the recognizer cannot run; back off instead of restarting in a tight loop.
         this.recognizing = false;
         this.emit({ type: 'capture', active: false });
-        this.update();
+        const quick = Date.now() - this.startedAt < 1500;
+        this.quickEnds = quick ? this.quickEnds + 1 : 0;
+        if (this.quickEnds === 4) {
+          this.emit({
+            type: 'error',
+            code: 'recognition',
+            message: `Speech recognition keeps stopping${this.lastError ? `: ${this.lastError}` : ''}. Check Settings → Pocket → Speech Recognition and Microphone.`,
+            fatal: false,
+          });
+        }
+        const delay = quick ? Math.min(250 * 2 ** this.quickEnds, 8000) : 0;
+        if (this.restartTimer) clearTimeout(this.restartTimer);
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = null;
+          this.update();
+        }, delay);
       }),
       ExpoSpeechRecognitionModule.addListener('speechstart', () => this.emit({ type: 'vad', speaking: true })),
       ExpoSpeechRecognitionModule.addListener('speechend', () => this.emit({ type: 'vad', speaking: false })),
@@ -120,6 +142,8 @@ export class JsSpeechEngine implements SpeechEngine {
   end(): void {
     if (this.ended) return;
     this.ended = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
     this.abort();
     this.queue = [];
     this.speaking = null;
@@ -185,6 +209,7 @@ export class JsSpeechEngine implements SpeechEngine {
   private listen(): void {
     if (!this.options) return;
     this.recognizing = true;
+    this.startedAt = Date.now();
     this.heard = '';
     try {
       ExpoSpeechRecognitionModule.start({
