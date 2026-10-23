@@ -119,6 +119,8 @@ export class PocketBot {
   private connect(id: string, link: Link): Linked {
     const client = new ChatClient({
       ...link.credentials,
+      relayUrl: this.opts.relayUrl,
+      followRelayMoves: false,
       identity: deserializeIdentity(link.credentials.identity),
       WebSocket: this.opts.WebSocket,
       replayState: link.replay,

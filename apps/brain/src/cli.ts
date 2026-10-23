@@ -48,7 +48,7 @@ async function runDaemon(): Promise<void> {
   log(`brain ${brain.deviceId} account ${brain.accountId} relay ${state.relayUrl} claude ${claudePath ?? 'bundled'}`);
 
   if (existsSync(paths.socket)) unlinkSync(paths.socket);
-  const telegram = new TelegramRunner(brain);
+  const telegram = new TelegramRunner(brain, state.relayUrl);
   const server = createServer((socket) => handleControl(socket, brain, telegram, () => shutdown()));
   server.listen(paths.socket);
 
@@ -71,7 +71,11 @@ class TelegramRunner {
   private bot: PocketBot | undefined;
   private token: string | undefined;
 
-  constructor(private readonly brain: Brain) {}
+  /** `relayUrl` is the daemon's own (local) relay address: the bot runs on the same machine and must not go through the public one. */
+  constructor(
+    private readonly brain: Brain,
+    private readonly relayUrl: string,
+  ) {}
 
   /** Starts, restarts or stops the bot to match the brain's configuration. */
   apply(): void {
@@ -83,7 +87,7 @@ class TelegramRunner {
       this.token = key;
       const bot = new PocketBot({
         token: config.token,
-        relayUrl: this.brain.status().relayUrl,
+        relayUrl: this.relayUrl,
         ...(config.appUrl ? { appUrl: config.appUrl } : {}),
         store: fileStore(join(paths.home, 'telegram.json')),
         log,

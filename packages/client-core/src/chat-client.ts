@@ -51,6 +51,8 @@ export interface ChatClientOptions extends ClientCredentials {
   log?: (m: string) => void;
   /** The brain announced a new relay address; persist it so the next start uses it. */
   onRelayMoved?: (url: string) => void;
+  /** False for clients on the relay's own machine: they keep the local address the brain advertises around. */
+  followRelayMoves?: boolean;
   /** How long streamed text is batched before listeners see it (default 120 ms). */
   deltaIntervalMs?: number;
 }
@@ -474,7 +476,7 @@ export class ChatClient {
         return;
       }
       case 'relay.moved':
-        if (!isRelayUrl(message.payload.url) || message.payload.url === this.link.currentRelayUrl) return;
+        if (this.opts.followRelayMoves === false || !isRelayUrl(message.payload.url) || message.payload.url === this.link.currentRelayUrl) return;
         this.link.setRelayUrl(message.payload.url);
         this.opts.onRelayMoved?.(message.payload.url);
         return;
