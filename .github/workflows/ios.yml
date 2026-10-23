@@ -1,0 +1,66 @@
+name: iOS build
+
+# Compiles the iPhone app, including the native call engine in apps/mobile/modules, so Swift errors show up here
+# rather than on the Mac at install time. Unsigned simulator build: no Apple account involved.
+on:
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/ios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build for the iOS simulator
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate the native project (expo prebuild + pod install)
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform ios --clean
+        env:
+          CI: 1
+      - name: Compile
+        working-directory: apps/mobile/ios
+        run: |
+          set -o pipefail
+          xcodebuild -workspace Pocket.xcworkspace -scheme Pocket -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build > build.log 2>&1 || {
+              echo '::group::Errors'
+              grep -E 'error:|fatal error' build.log | sort -u | head -n 80
+              echo '::endgroup::'
+              tail -n 80 build.log
+              exit 1
+            }
+          echo '::group::Warnings in the call engine'
+          grep -E 'warning: .*modules/pocket-call' build.log | sort -u | head -n 60 || true
+          echo '::endgroup::'
+          tail -n 5 build.log
+      - name: Keep the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: apps/mobile/ios/build.log
+          if-no-files-found: ignore
